@@ -109,30 +109,41 @@ def load_config():
 
 
 def choose_provider(config):
-    configured = str(config.get("provider", "groq")).lower()
-    default = "2" if configured in {"ollama", "local"} else "1"
+    configured = str(config.get("provider", "nvidia")).lower()
+    if configured in {"ollama", "local"}:
+        default = "3" if config.get("local_model") != "deepseek-coder:1.3b" else "4"
+    elif configured == "groq":
+        default = "2"
+    else:
+        default = "1"
 
     print("  Select provider / coding model")
-    print("  [1] Groq API             — online")
     print(
-        "  [2] Ollama · Qwen Coder  — local "
+        "  [1] NVIDIA NIM API       — recommended "
+        f"({config.get('nvidia_model', 'poolside/laguna-xs-2.1')})"
+    )
+    print("  [2] Groq API             — online")
+    print(
+        "  [3] Ollama · Qwen Coder  — local "
         f"({config.get('local_model', 'qwen2.5-coder:1.5b')})"
     )
-    print("  [3] Ollama · DeepSeek    — local (deepseek-coder:1.3b)")
+    print("  [4] Ollama · DeepSeek    — local (deepseek-coder:1.3b)")
 
     try:
-        choice = input(f"\n  Choose [1/2/3, Enter={default}]: ").strip()
+        choice = input(f"\n  Choose [1/2/3/4, Enter={default}]: ").strip()
     except (KeyboardInterrupt, EOFError):
         return None
 
     choice = choice or default
 
     if choice == "1":
-        config["provider"] = "groq"
+        config["provider"] = "nvidia"
     elif choice == "2":
+        config["provider"] = "groq"
+    elif choice == "3":
         config["provider"] = "ollama"
         config["local_model"] = "qwen2.5-coder:1.5b"
-    elif choice == "3":
+    elif choice == "4":
         config["provider"] = "ollama"
         config["local_model"] = "deepseek-coder:1.3b"
     else:
@@ -258,6 +269,8 @@ def main():
 
     if provider == "ollama":
         model = config.get("local_model", "qwen2.5-coder:1.5b")
+    elif provider in {"nvidia", "nvidia_nim"}:
+        model = config.get("nvidia_model", "poolside/laguna-xs-2.1")
     else:
         model = config.get("models", {}).get("coder", "Not configured")
 
@@ -326,6 +339,28 @@ def main():
             print(f"  Memory   : {len(agent.session_history) // 2} recent turns")
             print()
             continue
+
+        if command == "/task":
+            print("  Enter the complete task on multiple lines.")
+            print("  Type END on a line by itself when you are finished.")
+            task_lines = []
+            try:
+                while True:
+                    line = input("  ... ")
+                    if line.strip().upper() == "END":
+                        break
+                    task_lines.append(line)
+            except (KeyboardInterrupt, EOFError):
+                print("\n  Multi-line task cancelled.")
+                print()
+                continue
+
+            user_input = "\n".join(task_lines).strip()
+            if not user_input:
+                UI.error("No task entered.")
+                print()
+                continue
+            command = user_input.lower()
 
         # Handle greetings without running the coding agent.
         quick_response = simple_reply(user_input)
