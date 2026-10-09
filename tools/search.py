@@ -1,57 +1,43 @@
+"""Workspace text search for Local Codex."""
+
 import os
+
+from tools.files import IGNORED_DIRS, MAX_SEARCH_FILE_BYTES, safe_path
 
 
 def search_files(workspace, query):
+    """Return relative paths of text files containing a case-insensitive query."""
+    if not isinstance(query, str) or not query.strip():
+        return {"success": False, "error": "Search query must not be empty."}
 
+    workspace = os.path.realpath(os.path.abspath(workspace))
+    needle = query.casefold()
     results = []
+    skipped_large = 0
 
-    ignored = {
-        ".git",
-        "node_modules",
-        "__pycache__",
-        ".venv",
-        "venv",
-        ".idea",
-        ".vscode"
-    }
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = sorted(d for d in dirs if d not in IGNORED_DIRS)
 
-    for root, dirs, files in os.walk(workspace):
-
-        dirs[:] = [
-            d for d in dirs
-            if d not in ignored
-        ]
-
-        for filename in files:
-
-            path = os.path.join(
-                root,
-                filename
-            )
-
+        for filename in filenames:
+            path = os.path.join(root, filename)
             try:
-
-                with open(
-                    path,
-                    "r",
-                    encoding="utf-8"
-                ) as file:
-
-                    content = file.read()
-
-                if query.lower() in content.lower():
-
-                    results.append(
-                        os.path.relpath(
-                            path,
-                            workspace
-                        )
-                    )
-
-            except (
-                UnicodeDecodeError,
-                PermissionError
-            ):
+                if os.path.getsize(path) > MAX_SEARCH_FILE_BYTES:
+                    skipped_large += 1
+                    continue
+                with open(path, "r", encoding="utf-8", errors="ignore") as file:
+                    for line in file:
+                        if needle in line.casefold():
+                            results.append(os.path.relpath(path, workspace))
+                            break
+            except (OSError, PermissionError):
                 continue
 
-    return results
+    unique_results = sorted(set(results))
+    return {
+        "success": True,
+        "query": query,
+        "matches": unique_results[:500],
+        "count": len(unique_results),
+        "truncated": len(unique_results) > 500,
+        "skipped_large_files": skipped_large,
+    }
