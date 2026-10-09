@@ -1,4 +1,4 @@
-﻿
+
 import os
 import json
 import sys
@@ -112,15 +112,16 @@ def choose_provider(config):
     configured = str(config.get("provider", "groq")).lower()
     default = "2" if configured in {"ollama", "local"} else "1"
 
-    print("  Select provider")
-    print("  [1] Groq API  — online")
+    print("  Select provider / coding model")
+    print("  [1] Groq API             — online")
     print(
-        "  [2] Ollama    — local "
+        "  [2] Ollama · Qwen Coder  — local "
         f"({config.get('local_model', 'qwen2.5-coder:1.5b')})"
     )
+    print("  [3] Ollama · DeepSeek    — local (deepseek-coder:1.3b)")
 
     try:
-        choice = input(f"\n  Choose [1/2, Enter={default}]: ").strip()
+        choice = input(f"\n  Choose [1/2/3, Enter={default}]: ").strip()
     except (KeyboardInterrupt, EOFError):
         return None
 
@@ -130,6 +131,10 @@ def choose_provider(config):
         config["provider"] = "groq"
     elif choice == "2":
         config["provider"] = "ollama"
+        config["local_model"] = "qwen2.5-coder:1.5b"
+    elif choice == "3":
+        config["provider"] = "ollama"
+        config["local_model"] = "deepseek-coder:1.3b"
     else:
         UI.error("Invalid choice.")
         return None
