@@ -81,7 +81,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
                         "content": "print('calculator ready')\n",
                     },
                 }),
-                '{"name":"run_command","arguments":{"command":"python -c \"print(\\\"checked\\\")\""}}',
+                '{"name":"run_command","arguments":{"command":"python -c 'print(123)'"}}',
                 "Created and verified calculator_gui/main.py.",
             ])
 
@@ -113,7 +113,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
             with open(target, "r", encoding="utf-8") as file:
                 compile(file.read(), target, "exec")
             self.assertEqual(result, "Created and verified calculator_gui/main.py.")
-            self.assertEqual(len(fake_client.messages_seen), 4)
+            self.assertEqual(len(fake_client.messages_seen), 5)
             # The echoed JSON response is treated as an intermediate result, not final output.
             self.assertIn(
                 "RESULT of tool create_folder",
@@ -139,8 +139,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
                         "content": "print('gui ready')\\n",
                     },
                 }),
-                '{"name":"run_command","arguments":{"command":"python -c \"print(\\\"checked\\\")\""}}',
-                '{"name":"run_command","arguments":{"command":"python -c \"print(\\\"checked\\\")\""}}',
+                '{"name":"run_command","arguments":{"command":"python -c 'print(123)'"}}',
                 "Created and verified gui/main.py.",
             ])
             agent = MultiModelAgent(
@@ -152,6 +151,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
                 tools={
                     "create_folder": create_folder,
                     "write_file": write_file,
+                    "run_command": run_command,
                 },
                 tool_schemas=[{"type": "function", "function": {"name": "write_file"}}],
                 workspace=workspace,
@@ -180,7 +180,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
                         "content": "print('hello')\n",
                     },
                 }),
-                '{"name":"run_command","arguments":{"command":"python -c \"print(\\\"checked\\\")\""}}',
+                '{"name":"run_command","arguments":{"command":"python -c 'print(123)'"}}',
                 "Created calculator_gui/main.py and verified it.",
             ])
             agent = MultiModelAgent(
@@ -202,7 +202,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
                 os.path.isfile(os.path.join(workspace, "calculator_gui", "main.py"))
             )
             self.assertEqual(result, "Created calculator_gui/main.py and verified it.")
-            self.assertEqual(len(fake_client.messages_seen), 3)
+            self.assertEqual(len(fake_client.messages_seen), 4)
 
 
     def test_recovers_multiple_json_objects_and_deduplicates_identical_calls(self):
@@ -226,6 +226,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
                         "content": "print('created after duplicate')\\n",
                     },
                 }),
+                '{"name":"run_command","arguments":{"command":"python -c 'print(123)'"}}',
                 "Created and verified gui/main.py.",
             ])
             agent = MultiModelAgent(
