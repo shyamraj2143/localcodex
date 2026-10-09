@@ -184,6 +184,7 @@ class MultiModelAgent:
                 base_url=self.config.get(
                     "ollama_base_url", "http://localhost:11434/v1"
                 ),
+                force_json_tools=self.config.get("ollama_force_json_tools", True),
                 **common,
             )
 
@@ -333,12 +334,39 @@ class MultiModelAgent:
         client = self.get_client("coder")
 
         tools_description = ", ".join(sorted(self.tools))
+        provider = str(self.config.get("provider", "groq")).lower()
+        tool_catalog = json.dumps(
+            [
+                {
+                    "name": schema.get("function", {}).get("name"),
+                    "description": schema.get("function", {}).get("description", ""),
+                    "parameters": schema.get("function", {}).get("parameters", {}),
+                }
+                for schema in self.tool_schemas
+                if isinstance(schema, dict) and isinstance(schema.get("function"), dict)
+            ],
+            ensure_ascii=False,
+        )
+        local_mode_rules = ""
+        if provider in {"ollama", "local"}:
+            local_mode_rules = f"""
+LOCAL MODEL MODE (important):
+- You may be a small model, so work in short, concrete steps. Do not plan the entire project in one response.
+- Tool catalogue with exact parameter names: {tool_catalog}
+- Return one action at a time as JSON only when using tools: {{"name":"TOOL_NAME","arguments":{{...}}}}.
+- Never return fenced JSON, a list of actions, or prose around a tool call.
+- After every tool result, decide the NEXT distinct action. Do not repeat successful folder creation.
+- For code requests, write a complete runnable first version before polishing.
+- Then run a syntax check or test, read the error if it fails, fix it, and rerun the check.
+- Do not claim success from a plan; verify files and command output.
+"""
         system_prompt = f"""
 You are Local Codex, an autonomous software engineering agent working in:
 {self.workspace}
 
 Your job is to actually complete the user's coding task, not just explain how.
 Available tools: {tools_description}
+{local_mode_rules}
 
 MANDATORY WORKFLOW:
 1. Inspect the workspace and relevant files before changing code.
