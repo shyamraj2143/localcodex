@@ -118,27 +118,24 @@ def _expected_artifact_paths(task):
         return []
 
     folders = re.findall(
-        r"\\bfolder\\s+(?:named|called)\\s+[`\\\"']?([A-Za-z0-9_.-]+)",
+        r"\bfolder\s+(?:named|called)\s+["']?([A-Za-z0-9_.-]+)",
         task,
         flags=re.IGNORECASE,
     )
     file_paths = re.findall(
-        r"\\b(?:create|write|save|generate|make)\\s+(?:a\\s+)?(?:new\\s+)?"
-        r"(?:file\\s+(?:named|called)\\s+)?[`\\\"']?"
-        r"((?:[A-Za-z0-9_.-]+[\\\\/])*[A-Za-z0-9_.-]+\\.[A-Za-z0-9]{1,8})",
+        r"\b(?:create|write|save|generate|make)\s+(?:a\s+)?(?:new\s+)?"
+        r"(?:file\s+(?:named|called)\s+)?["']?"
+        r"((?:[A-Za-z0-9_.-]+[\\/])*[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,8})",
         task,
         flags=re.IGNORECASE,
     )
 
-    expected = []
-    for folder in folders:
-        expected.append(folder)
-
+    expected = list(folders)
     inside_folder = bool(
-        re.search(r"\\binside\\s+(?:it|that folder|the folder)\\b", task, re.IGNORECASE)
+        re.search(r"\binside\s+(?:it|that folder|the folder)\b", task, re.IGNORECASE)
     )
     for file_path in file_paths:
-        normalized = file_path.replace("\\\\", "/").replace("\\", "/")
+        normalized = file_path.replace("\\", "/")
         if inside_folder and folders and "/" not in normalized:
             normalized = folders[-1] + "/" + normalized
         if normalized not in expected:
