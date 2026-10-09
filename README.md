@@ -1,6 +1,6 @@
 # Local Codex
 
-A terminal-based AI coding assistant that can inspect, create, edit, and debug files in the current workspace. Supports Groq API models and a local Ollama model.
+A terminal-based AI coding assistant that can inspect, create, edit, and debug files in the current workspace. Supports NVIDIA NIM, Groq API models, and local Ollama models.
 
 ## Requirements
 
@@ -39,7 +39,7 @@ A terminal-based AI coding assistant that can inspect, create, edit, and debug f
    notepad .env
    ```
 
-   Set `NVIDIA_API_KEY` in `.env`. The default model is `poolside/laguna-xs-2.1` and the endpoint is `https://integrate.api.nvidia.com/v1`. The key stays in your local `.env`; never commit or share it. Groq remains available as option 2.
+   Set `NVIDIA_API_KEY` in `.env`. The default model is `qwen/qwen2.5-coder-32b-instruct` and the endpoint is `https://integrate.api.nvidia.com/v1`. The key stays in your local `.env`; never commit or share it. Groq remains available as option 2.
 
 5. For local Ollama mode, pull one or both supported coding models:
 
@@ -60,7 +60,7 @@ A terminal-based AI coding assistant that can inspect, create, edit, and debug f
 
 ## Usage
 
-Choose Groq or Ollama when prompted, then describe a coding task. Example:
+Choose NVIDIA, Groq, or Ollama when prompted, then describe a coding task. Example:
 
 ```text
 Create a Python calculator in calculator.py with addition, subtraction, multiplication, division, clear, and backspace.
