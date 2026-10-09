@@ -1,5 +1,5 @@
 {
-    "provider": "groq",
+    "provider": "nvidia",
     "local_model": "qwen2.5-coder:1.5b",
     "ollama_base_url": "http://localhost:11434/v1",
     "models": {
@@ -16,5 +16,7 @@
     "retry": {
         "max_attempts": 5,
         "base_delay": 1.5
-    }
+    },
+    "nvidia_model": "poolside/laguna-xs-2.1",
+    "nvidia_base_url": "https://integrate.api.nvidia.com/v1"
 }
