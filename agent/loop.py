@@ -118,7 +118,7 @@ def _expected_artifact_paths(task):
         return []
 
     folders = re.findall(
-        r"\bfolder\s+(?:named|called)\s+([A-Za-z0-9_.-]+)",
+        r"\bfolder\s+(?:named|called)\s+([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)",
         task,
         flags=re.IGNORECASE,
     )
