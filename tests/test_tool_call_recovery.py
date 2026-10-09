@@ -12,6 +12,7 @@ from agent.loop import (
 )
 from tools.files import write_file
 from tools.registry import create_folder
+from tools.terminal import run_command
 
 
 class FakeClient:
@@ -80,6 +81,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
                         "content": "print('calculator ready')\n",
                     },
                 }),
+                '{"name":"run_command","arguments":{"command":"python -c \"print(\\\"checked\\\")\""}}',
                 "Created and verified calculator_gui/main.py.",
             ])
 
@@ -92,6 +94,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
                 tools={
                     "create_folder": create_folder,
                     "write_file": write_file,
+                    "run_command": run_command,
                 },
                 tool_schemas=[],
                 workspace=workspace,
@@ -136,6 +139,8 @@ class RecoverTextToolCallTests(unittest.TestCase):
                         "content": "print('gui ready')\\n",
                     },
                 }),
+                '{"name":"run_command","arguments":{"command":"python -c \"print(\\\"checked\\\")\""}}',
+                '{"name":"run_command","arguments":{"command":"python -c \"print(\\\"checked\\\")\""}}',
                 "Created and verified gui/main.py.",
             ])
             agent = MultiModelAgent(
@@ -175,6 +180,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
                         "content": "print('hello')\n",
                     },
                 }),
+                '{"name":"run_command","arguments":{"command":"python -c \"print(\\\"checked\\\")\""}}',
                 "Created calculator_gui/main.py and verified it.",
             ])
             agent = MultiModelAgent(
@@ -183,7 +189,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
                     "local_model": "test-model",
                     "max_agent_steps": 8,
                 },
-                tools={"write_file": write_file},
+                tools={"write_file": write_file, "run_command": run_command},
                 tool_schemas=[],
                 workspace=workspace,
             )
@@ -224,7 +230,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
             ])
             agent = MultiModelAgent(
                 config={"provider": "ollama", "local_model": "test-model", "max_agent_steps": 8},
-                tools={"create_folder": create_folder, "write_file": write_file},
+                tools={"create_folder": create_folder, "write_file": write_file, "run_command": run_command},
                 tool_schemas=[],
                 workspace=workspace,
             )
