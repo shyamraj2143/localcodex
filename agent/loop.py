@@ -2,7 +2,6 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from agent.groq import GroqClient
 from agent.ollama import OllamaClient
-from agent.groq import GroqClient
 
 import re
 import uuid
@@ -573,20 +572,21 @@ performed by the integration agent.
             # ------------------------------------------------
 
             tool_calls = message.tool_calls
+            recovered_text_call = False
 
             if not tool_calls:
                 tool_calls = recover_text_tool_calls(
                     message.content,
                     self.tools,
                 )
+                recovered_text_call = bool(tool_calls)
 
             if not tool_calls:
                 return message.content or "No report generated."
 
-            if message.tool_calls:
-                messages.append(message)
-            else:
-                # Preserve the proper assistant/tool-call conversation format.
+            # Keep exactly one assistant message in the conversation.
+            # Recovered JSON calls need the same structure as native tool calls.
+            if recovered_text_call:
                 messages.append({
                     "role": "assistant",
                     "content": None,
@@ -602,23 +602,14 @@ performed by the integration agent.
                         for call in tool_calls
                     ],
                 })
-
-                return (
-                    message.content
-                    or "No report generated."
-                )
-
-            messages.append(
-                message
-            )
+            else:
+                messages.append(message)
 
             # ------------------------------------------------
             # TOOL CALLS
             # ------------------------------------------------
 
-            for tool_call in (
-                message.tool_calls
-            ):
+            for tool_call in tool_calls:
 
                 tool_name = (
                     tool_call
@@ -834,19 +825,21 @@ SPECIALIST REPORTS:
             # ------------------------------------------------
 
             tool_calls = message.tool_calls
+            recovered_text_call = False
 
             if not tool_calls:
                 tool_calls = recover_text_tool_calls(
                     message.content,
                     self.tools,
                 )
+                recovered_text_call = bool(tool_calls)
 
             if not tool_calls:
                 return message.content or "Task completed."
 
-            if message.tool_calls:
-                messages.append(message)
-            else:
+            # Keep exactly one assistant message in the conversation.
+            # Recovered JSON calls need the same structure as native tool calls.
+            if recovered_text_call:
                 messages.append({
                     "role": "assistant",
                     "content": None,
@@ -862,23 +855,14 @@ SPECIALIST REPORTS:
                         for call in tool_calls
                     ],
                 })
-
-                return (
-                    message.content
-                    or "Task completed."
-                )
-
-            messages.append(
-                message
-            )
+            else:
+                messages.append(message)
 
             # ------------------------------------------------
             # EXECUTE TOOLS
             # ------------------------------------------------
 
-            for tool_call in (
-                message.tool_calls
-            ):
+            for tool_call in tool_calls:
 
                 tool_name = (
                     tool_call
