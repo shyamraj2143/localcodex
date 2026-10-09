@@ -196,5 +196,46 @@ class RecoverTextToolCallTests(unittest.TestCase):
             self.assertEqual(len(fake_client.messages_seen), 3)
 
 
+    def test_recovers_multiple_json_objects_and_deduplicates_identical_calls(self):
+        raw = (
+            'Here is an action: {"name":"create_folder","arguments":{"path":"gui"}} '
+            'and the same action again: {"name":"create_folder","arguments":{"path":"gui"}}'
+        )
+        calls = recover_text_tool_calls(raw, {"create_folder": lambda **kwargs: None})
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].function.name, "create_folder")
+
+    def test_repeated_successful_folder_creation_does_not_block_file_creation(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            fake_client = FakeClient([
+                '{"name":"create_folder","arguments":{"path":"gui"}}',
+                '{"name":"create_folder","arguments":{"path":"gui"}}',
+                json.dumps({
+                    "name": "write_file",
+                    "arguments": {
+                        "path": "gui/main.py",
+                        "content": "print('created after duplicate')\\n",
+                    },
+                }),
+                "Created and verified gui/main.py.",
+            ])
+            agent = MultiModelAgent(
+                config={"provider": "ollama", "local_model": "test-model", "max_agent_steps": 8},
+                tools={"create_folder": create_folder, "write_file": write_file},
+                tool_schemas=[],
+                workspace=workspace,
+            )
+            agent.get_client = lambda role="coder": fake_client
+            result = agent.integrate(
+                "Create a folder named gui. Inside it, create main.py containing code.",
+                [],
+            )
+            target = os.path.join(workspace, "gui", "main.py")
+            self.assertTrue(os.path.isfile(target))
+            with open(target, "r", encoding="utf-8") as file:
+                self.assertEqual(file.read(), "print('created after duplicate')\\n")
+            self.assertEqual(result, "Created and verified gui/main.py.")
+            self.assertEqual(len(fake_client.messages_seen), 4)
+
 if __name__ == "__main__":
     unittest.main()
