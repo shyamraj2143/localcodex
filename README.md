@@ -40,11 +40,14 @@ A terminal-based AI coding assistant that can inspect, create, edit, and debug f
 
    Replace the placeholder with your own key. Never commit `.env` or share your API key.
 
-5. For local Ollama mode, pull the configured model:
+5. For local Ollama mode, pull one or both supported coding models:
 
    ```powershell
    ollama pull qwen2.5-coder:1.5b
+   ollama pull deepseek-coder:1.3b
    ```
+
+   At startup, choose **[2] Qwen2.5-Coder 1.5B** or **[3] DeepSeek-Coder 1.3B**. Option 3 downloads only if you run the pull command; it is not downloaded automatically. If a small model returns an empty response while tool calling, Local Codex now retries with a simpler text-based tool-call format.
 
 6. Start Local Codex from the directory you want it to work in:
 
