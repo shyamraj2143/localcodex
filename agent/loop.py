@@ -118,13 +118,13 @@ def _expected_artifact_paths(task):
         return []
 
     folders = re.findall(
-        r"\bfolder\s+(?:named|called)\s+["']?([A-Za-z0-9_.-]+)",
+        r"\bfolder\s+(?:named|called)\s+[\\x22\']?([A-Za-z0-9_.-]+)",
         task,
         flags=re.IGNORECASE,
     )
     file_paths = re.findall(
         r"\b(?:create|write|save|generate|make)\s+(?:a\s+)?(?:new\s+)?"
-        r"(?:file\s+(?:named|called)\s+)?["']?"
+        r"(?:file\s+(?:named|called)\s+)?[\\x22\']?"
         r"((?:[A-Za-z0-9_.-]+[\\/])*[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,8})",
         task,
         flags=re.IGNORECASE,
