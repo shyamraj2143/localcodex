@@ -379,6 +379,7 @@ Workspace root is the current directory. Keep file operations inside it.
         completion_retries = 0
         empty_response_retries = 0
         disable_tools_next = False
+        successful_mutation_calls = set()
         recent_user_tasks = [
             item.get("content", "")
             for item in self.session_history
@@ -524,9 +525,60 @@ Workspace root is the current directory. Keep file operations inside it.
             else:
                 messages.append(message)
 
-            # Execute every requested tool and feed real results back to the model.
+            # Execute requested tools, but prevent the model from repeating a
+            # successful mutation forever (a common failure in weaker tool-use models).
+            duplicate_mutation = False
             for tool_call in tool_calls:
-                messages.append(self._tool_message(tool_call))
+                name = tool_call.function.name
+                try:
+                    arguments = json.loads(tool_call.function.arguments or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    arguments = {}
+                signature = (
+                    name,
+                    json.dumps(arguments, sort_keys=True, ensure_ascii=False),
+                )
+
+                if name in {"create_folder", "write_file", "edit_file"} and signature in successful_mutation_calls:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": json.dumps({
+                            "success": False,
+                            "error": (
+                                "Duplicate mutation blocked: this exact action already "
+                                "succeeded. Do not repeat it. Choose the next missing step."
+                            ),
+                        }),
+                    })
+                    duplicate_mutation = True
+                    continue
+
+                tool_message = self._tool_message(tool_call)
+                messages.append(tool_message)
+                try:
+                    tool_result = json.loads(tool_message["content"])
+                except (json.JSONDecodeError, TypeError):
+                    tool_result = {}
+                if (
+                    name in {"create_folder", "write_file", "edit_file"}
+                    and isinstance(tool_result, dict)
+                    and tool_result.get("success") is True
+                ):
+                    successful_mutation_calls.add(signature)
+
+            if duplicate_mutation:
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "You repeated a file/folder mutation that already succeeded. "
+                        "Do not output explanatory prose or repeat the same JSON. "
+                        "Continue the original task with the next distinct action. "
+                        "For a requested source file, call write_file with the complete "
+                        "implementation, then run_command for a syntax check and inspect "
+                        "the result. Only finish after checking the actual workspace."
+                    ),
+                })
 
         limit_message = (
             f"Stopped after {self.max_steps} tool steps to avoid an infinite loop. "
