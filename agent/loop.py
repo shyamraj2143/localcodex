@@ -141,7 +141,10 @@ def _expected_artifact_paths(task):
         task,
         flags=re.IGNORECASE,
     ))
-    folders = list(dict.fromkeys(folders))
+    stop_words = {"aur", "and", "or", "usme", "isme", "then", "with", "code"}
+    folders = list(dict.fromkeys(
+        folder for folder in folders if folder.lower() not in stop_words
+    ))
     # Capture explicitly mentioned source/config files even when the user phrases
     # the request in Hindi/Hinglish ("main.py mein code likho").
     file_paths = re.findall(
