@@ -430,6 +430,8 @@ Workspace root is the current directory. Keep file operations inside it.
         empty_response_retries = 0
         disable_tools_next = False
         successful_mutation_calls = set()
+        executed_tool_calls = 0
+        mutation_needs_verification = False
         recent_user_tasks = [
             item.get("content", "")
             for item in self.session_history
@@ -516,8 +518,10 @@ Workspace root is the current directory. Keep file operations inside it.
                         missing_artifacts.append(artifact)
 
                 echoed_tool_result = _is_tool_result_json(final_text)
+                no_local_work = local_json_mode and executed_tool_calls == 0
+                unverified_changes = local_json_mode and mutation_needs_verification
                 if (
-                    (echoed_tool_result or missing_artifacts)
+                    (echoed_tool_result or missing_artifacts or no_local_work or unverified_changes)
                     and completion_retries < 4
                 ):
                     completion_retries += 1
@@ -534,6 +538,14 @@ Workspace root is the current directory. Keep file operations inside it.
                             + ", ".join(missing_artifacts)
                             + "."
                         )
+                    if no_local_work:
+                        reasons.append(
+                            "You have not executed any workspace tool yet. Inspect the project and do the requested work."
+                        )
+                    if unverified_changes:
+                        reasons.append(
+                            "You changed a source file but have not verified it with a relevant run_command check. Run the check, fix failures, and rerun it."
+                        )
 
                     messages.append({
                         "role": "user",
@@ -548,7 +560,7 @@ Workspace root is the current directory. Keep file operations inside it.
                     })
                     continue
 
-                if echoed_tool_result or missing_artifacts:
+                if echoed_tool_result or missing_artifacts or no_local_work or unverified_changes:
                     details = []
                     if echoed_tool_result:
                         details.append("the model repeatedly echoed tool-result JSON")
@@ -556,6 +568,10 @@ Workspace root is the current directory. Keep file operations inside it.
                         details.append(
                             "missing deliverables: " + ", ".join(missing_artifacts)
                         )
+                    if no_local_work:
+                        details.append("no workspace tools were executed")
+                    if unverified_changes:
+                        details.append("source changes were not verified with a successful command")
                     final_text = (
                         "Local Codex could not verify task completion because "
                         + "; ".join(details)
@@ -620,6 +636,21 @@ Workspace root is the current directory. Keep file operations inside it.
                         and tool_result.get("success") is True
                     ):
                         successful_mutation_calls.add(signature)
+
+                executed_tool_calls += 1
+                if (
+                    name in {"write_file", "edit_file"}
+                    and isinstance(tool_result, dict)
+                    and tool_result.get("success") is True
+                ):
+                    mutation_needs_verification = True
+                if (
+                    name == "run_command"
+                    and isinstance(tool_result, dict)
+                    and tool_result.get("success") is True
+                    and tool_result.get("return_code", 1) == 0
+                ):
+                    mutation_needs_verification = False
 
                 if local_json_mode and recovered:
                     readable_result = json.dumps(
