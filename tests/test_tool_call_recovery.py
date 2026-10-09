@@ -114,10 +114,11 @@ class RecoverTextToolCallTests(unittest.TestCase):
             # The echoed JSON response is treated as an intermediate result, not final output.
             self.assertIn(
                 "RESULT of tool create_folder",
-                fake_client.messages_seen[2][-1]["content"],
+                fake_client.messages_seen[1][-1]["content"],
             )
-            self.assertEqual(fake_client.messages_seen[1][1]["role"], "assistant")
-            self.assertNotIn("tool_calls", fake_client.messages_seen[1][1])
+            self.assertEqual(fake_client.messages_seen[1][-1]["role"], "user")
+            self.assertEqual(fake_client.messages_seen[1][-2]["role"], "assistant")
+            self.assertNotIn("tool_calls", fake_client.messages_seen[1][-2])
 
 
     def test_empty_response_retries_without_tool_schemas(self):
