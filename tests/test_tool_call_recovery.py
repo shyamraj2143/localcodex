@@ -69,6 +69,18 @@ class RecoverTextToolCallTests(unittest.TestCase):
         )
         self.assertEqual(paths, ["calculator_gui", "calculator_gui/main.py"])
 
+    def test_expected_artifacts_understand_hinglish_file_requests(self):
+        paths = _expected_artifact_paths(
+            "calculator_gui folder banao aur usme main.py mein calculator code likho"
+        )
+        self.assertEqual(paths, ["calculator_gui", "calculator_gui/main.py"])
+
+    def test_expected_artifacts_detect_file_name_without_english_create_verb(self):
+        self.assertEqual(
+            _expected_artifact_paths("main.py banao aur calculator ka GUI do"),
+            ["main.py"],
+        )
+
     def test_integrate_recovers_echo_and_continues_to_create_file(self):
         with tempfile.TemporaryDirectory() as workspace:
             fake_client = FakeClient([
