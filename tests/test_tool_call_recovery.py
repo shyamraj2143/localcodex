@@ -18,9 +18,11 @@ class FakeClient:
     def __init__(self, responses):
         self.responses = list(responses)
         self.messages_seen = []
+        self.tools_seen = []
 
     def chat(self, messages, tools=None):
         self.messages_seen.append(list(messages))
+        self.tools_seen.append(tools)
         content = self.responses.pop(0)
         message = SimpleNamespace(content=content, tool_calls=None)
         return SimpleNamespace(
@@ -114,6 +116,50 @@ class RecoverTextToolCallTests(unittest.TestCase):
                 "tool-result JSON object",
                 fake_client.messages_seen[2][-1]["content"],
             )
+
+
+    def test_empty_response_retries_without_tool_schemas(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            fake_client = FakeClient([
+                "",
+                json.dumps({
+                    "name": "create_folder",
+                    "arguments": {"path": "gui"},
+                }),
+                json.dumps({
+                    "name": "write_file",
+                    "arguments": {
+                        "path": "gui/main.py",
+                        "content": "print('gui ready')\\n",
+                    },
+                }),
+                "Created and verified gui/main.py.",
+            ])
+            agent = MultiModelAgent(
+                config={
+                    "provider": "ollama",
+                    "local_model": "test-model",
+                    "max_agent_steps": 8,
+                },
+                tools={
+                    "create_folder": create_folder,
+                    "write_file": write_file,
+                },
+                tool_schemas=[{"type": "function", "function": {"name": "write_file"}}],
+                workspace=workspace,
+            )
+            agent.get_client = lambda role="coder": fake_client
+
+            result = agent.integrate(
+                "Create a folder named gui. Inside it, create main.py containing code.",
+                [],
+            )
+
+            target = os.path.join(workspace, "gui", "main.py")
+            self.assertTrue(os.path.isfile(target))
+            self.assertEqual(result, "Created and verified gui/main.py.")
+            self.assertIsNone(fake_client.tools_seen[1])
+            self.assertIsNotNone(fake_client.tools_seen[0])
 
     def test_premature_done_is_retried_when_requested_file_is_missing(self):
         with tempfile.TemporaryDirectory() as workspace:
