@@ -1,12 +1,21 @@
-@"
+# Secrets and local environment
 .env
 .env.*
 !.env.example
+
+# Python bytecode and caches
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
 .venv/
 venv/
-.pytest_cache/
+env/
+
+# Editors and OS files
 .vscode/
 .idea/
-"@ | Set-Content .gitignore
+.DS_Store
+Thumbs.db
