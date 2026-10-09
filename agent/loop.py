@@ -344,6 +344,9 @@ MANDATORY WORKFLOW:
 8. Prefer small, focused changes. Preserve existing project conventions and unrelated work.
 9. Ask a short question only when an essential requirement cannot be inferred safely.
 10. Do not expose chain-of-thought. Give concise progress updates through tool use and a final summary.
+11. For ordinary underspecified coding requests (for example, "make this GUI better"), infer sensible defaults, inspect the project, and implement them instead of asking the user to restate an obvious goal.
+12. Treat the entire user message beginning with "Task:" as one complete task. Preserve all requirements, even if the prompt contains multiple paragraphs.
+13. Before finishing, verify requested files exist and run a syntax check or relevant tests when practical. If a check fails, fix it and rerun the check.
 
 TOOL CALL FORMAT:
 - Prefer native function tool calls.
@@ -374,7 +377,7 @@ Workspace root is the current directory. Keep file operations inside it.
             for item in self.session_history
             if item.get("role") == "user"
         ][-2:]
-        task_context = "\\n".join(recent_user_tasks + [task])
+        task_context = "\n".join(recent_user_tasks + [task])
 
         for step in range(self.max_steps):
             self.show_status(f"Thinking · step {step + 1}/{self.max_steps}")
