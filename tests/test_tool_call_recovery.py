@@ -75,7 +75,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
                     "name": "write_file",
                     "arguments": {
                         "path": "calculator_gui/main.py",
-                        "content": "print('calculator ready')\\n",
+                        "content": "print('calculator ready')\n",
                     },
                 }),
                 "Created and verified calculator_gui/main.py.",
@@ -104,7 +104,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
             target = os.path.join(workspace, "calculator_gui", "main.py")
             self.assertTrue(os.path.isfile(target))
             with open(target, "r", encoding="utf-8") as file:
-                self.assertEqual(file.read(), "print('calculator ready')\\n")
+                self.assertEqual(file.read(), "print('calculator ready')\n")
             self.assertEqual(result, "Created and verified calculator_gui/main.py.")
             self.assertEqual(len(fake_client.messages_seen), 4)
             # The echoed JSON response is treated as an intermediate result, not final output.
@@ -121,7 +121,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
                     "name": "write_file",
                     "arguments": {
                         "path": "calculator_gui/main.py",
-                        "content": "print('hello')\\n",
+                        "content": "print('hello')\n",
                     },
                 }),
                 "Created calculator_gui/main.py and verified it.",
