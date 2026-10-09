@@ -13,6 +13,7 @@ import uuid
 from types import SimpleNamespace
 
 from agent.groq import GroqClient
+from agent.nvidia import NvidiaClient
 from agent.ollama import OllamaClient
 
 
@@ -179,9 +180,23 @@ class MultiModelAgent:
                 **common,
             )
 
+        if provider in {"nvidia", "nvidia_nim"}:
+            retry = self.config.get("retry", {})
+            return NvidiaClient(
+                model=self.config.get(
+                    "nvidia_model", "poolside/laguna-xs-2.1"
+                ),
+                base_url=self.config.get(
+                    "nvidia_base_url", "https://integrate.api.nvidia.com/v1"
+                ),
+                **common,
+                max_attempts=retry.get("max_attempts", 3),
+                base_delay=retry.get("base_delay", 1.5),
+            )
+
         if provider != "groq":
             raise ValueError(
-                f"Unsupported provider: {provider}. Use 'groq' or 'ollama'."
+                f"Unsupported provider: {provider}. Use 'nvidia', 'groq', or 'ollama'."
             )
 
         model = self.models.get(role) or self.models.get("coder")
