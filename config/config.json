@@ -9,8 +9,8 @@
         "debugger": "minimaxai/minimax-m2.7",
         "reviewer": "openai/gpt-oss-120b"
     },
-    "max_parallel_workers": 4,
-    "max_agent_steps": 12,
+    "max_parallel_workers": 1,
+    "max_agent_steps": 24,
     "temperature": 0.1,
     "max_tokens": 8192,
     "retry": {
