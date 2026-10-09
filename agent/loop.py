@@ -126,21 +126,36 @@ def _expected_artifact_paths(task):
         return []
 
     folders = re.findall(
-        r"\bfolder\s+(?:named|called)\s+([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)",
+        r"\bfolder\s+(?:named|called|name|ka\s+naam)\s+([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)",
         task,
         flags=re.IGNORECASE,
     )
+    # Also understand common Hinglish requests such as "folder banao gui".
+    folders.extend(re.findall(
+        r"\bfolder\s+(?:banao|banaye|bana\s+do|create\s+karo)\s+([A-Za-z0-9_-]+)",
+        task,
+        flags=re.IGNORECASE,
+    ))
+    folders = list(dict.fromkeys(folders))
+    # Capture explicitly mentioned source/config files even when the user phrases
+    # the request in Hindi/Hinglish ("main.py mein code likho").
     file_paths = re.findall(
-        r"\b(?:create|write|save|generate|make)\s+(?:a\s+)?(?:new\s+)?"
-        r"(?:file\s+(?:named|called)\s+)?"
-        r"((?:[A-Za-z0-9_.-]+[\\/])*[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,8})",
+        r"((?:[A-Za-z0-9_.-]+[\\/])*[A-Za-z0-9_-]+\."
+        r"(?:py|pyw|js|jsx|ts|tsx|html|css|json|md|txt|java|cpp|c|cs|go|rs|php|sql|"
+        r"yml|yaml|toml|sh|bat|ps1|env))\b",
         task,
         flags=re.IGNORECASE,
     )
 
     expected = list(folders)
     inside_folder = bool(
-        re.search(r"\binside\s+(?:it|that folder|the folder)\b", task, re.IGNORECASE)
+        re.search(
+            r"\binside\s+(?:it|that folder|the folder)\b|"
+            r"\b(folder|directory)\s+ke\s+andar\b|"
+            r"\busme\b",
+            task,
+            re.IGNORECASE,
+        )
     )
     for file_path in file_paths:
         normalized = file_path.replace("\\", "/")
@@ -372,7 +387,7 @@ You are Local Codex, an autonomous coding agent.
 Workspace root: {self.workspace}
 Tools available: {tools_description}
 
-Understand the user's whole request, not just its first sentence. Preserve every explicit
+Understand the user's whole request in English, Hindi, or Hinglish, not just its first sentence. Preserve every explicit
 requirement and requested deliverable. Infer sensible defaults for minor details.
 Inspect the existing project before editing. Make real changes in workspace files; do not
 just explain or print code. Work in small steps, one tool action per response.
