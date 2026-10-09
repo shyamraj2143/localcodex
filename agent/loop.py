@@ -7,6 +7,7 @@ of an interactive coding agent.
 """
 
 import json
+import os
 import re
 import uuid
 from types import SimpleNamespace
@@ -97,6 +98,54 @@ def _is_tool_call_shaped_json(content):
     return isinstance(data, dict) and (
         "name" in data or "function" in data or "tool_calls" in data
     )
+
+
+def _is_tool_result_json(content):
+    """Detect a tool result that a small model mistakenly echoes as its answer."""
+    data = _extract_json_object(content)
+    if not isinstance(data, dict) or not isinstance(data.get("success"), bool):
+        return False
+    result_fields = {
+        "message", "path", "absolute_path", "bytes_written",
+        "return_code", "stdout", "stderr", "error", "output",
+    }
+    return bool(result_fields.intersection(data))
+
+
+def _expected_artifact_paths(task):
+    """Infer explicit file/folder deliverables so premature 'done' is caught."""
+    if not isinstance(task, str):
+        return []
+
+    folders = re.findall(
+        r"\\bfolder\\s+(?:named|called)\\s+[`\\\"']?([A-Za-z0-9_.-]+)",
+        task,
+        flags=re.IGNORECASE,
+    )
+    file_paths = re.findall(
+        r"\\b(?:create|write|save|generate|make)\\s+(?:a\\s+)?(?:new\\s+)?"
+        r"(?:file\\s+(?:named|called)\\s+)?[`\\\"']?"
+        r"((?:[A-Za-z0-9_.-]+[\\\\/])*[A-Za-z0-9_.-]+\\.[A-Za-z0-9]{1,8})",
+        task,
+        flags=re.IGNORECASE,
+    )
+
+    expected = []
+    for folder in folders:
+        expected.append(folder)
+
+    inside_folder = bool(
+        re.search(r"\\binside\\s+(?:it|that folder|the folder)\\b", task, re.IGNORECASE)
+    )
+    for file_path in file_paths:
+        normalized = file_path.replace("\\\\", "/").replace("\\", "/")
+        if inside_folder and folders and "/" not in normalized:
+            normalized = folders[-1] + "/" + normalized
+        if normalized not in expected:
+            expected.append(normalized)
+
+    # Only return relative paths; all actual operations remain workspace-scoped.
+    return [path for path in expected if path and not os.path.isabs(path)]
 
 
 class MultiModelAgent:
@@ -305,6 +354,14 @@ Workspace root is the current directory. Keep file operations inside it.
         })
 
         malformed_tool_retries = 0
+        completion_retries = 0
+        recent_user_tasks = [
+            item.get("content", "")
+            for item in self.session_history
+            if item.get("role") == "user"
+        ][-2:]
+        task_context = "\\n".join(recent_user_tasks + [task])
+
         for step in range(self.max_steps):
             self.show_status(f"Thinking · step {step + 1}/{self.max_steps}")
             response = client.chat(messages, tools=self.tool_schemas)
@@ -318,29 +375,92 @@ Workspace root is the current directory. Keep file operations inside it.
                 recovered = bool(tool_calls)
 
             if not tool_calls:
-                if _is_tool_call_shaped_json(getattr(message, "content", "")) and malformed_tool_retries < 2:
-                    malformed_tool_retries += 1
-                    messages.append({
-                        "role": "assistant",
-                        "content": message.content or "",
-                    })
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            "That looked like a tool call, but it was not executable. "
-                            f"Use only these exact registered tools: {tools_description}. "
-                            "Return a valid native tool call, or JSON with keys name and arguments. "
-                            "Arguments must be an object. Continue the task; do not stop here."
-                        ),
-                    })
-                    continue
-
                 final_text = (getattr(message, "content", None) or "").strip()
                 if not final_text:
                     final_text = (
                         "I couldn't complete the task because the model returned no final response. "
                         "Try again or use a stronger coding model."
                     )
+
+                if (
+                    _is_tool_call_shaped_json(final_text)
+                    and malformed_tool_retries < 2
+                ):
+                    malformed_tool_retries += 1
+                    messages.append({"role": "assistant", "content": final_text})
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "That looks like a tool call but was not executable. "
+                            f"Use only these exact registered tools: {tools_description}. "
+                            "Return a native function call or JSON with keys name and arguments. "
+                            "Arguments must be an object. Continue the task; do not stop."
+                        ),
+                    })
+                    continue
+
+                missing_artifacts = []
+                for artifact in _expected_artifact_paths(task_context):
+                    full_path = os.path.realpath(os.path.join(self.workspace, artifact))
+                    workspace_root = os.path.realpath(self.workspace)
+                    try:
+                        inside_workspace = (
+                            os.path.commonpath([workspace_root, full_path])
+                            == workspace_root
+                        )
+                    except ValueError:
+                        inside_workspace = False
+                    if inside_workspace and not os.path.exists(full_path):
+                        missing_artifacts.append(artifact)
+
+                echoed_tool_result = _is_tool_result_json(final_text)
+                if (
+                    (echoed_tool_result or missing_artifacts)
+                    and completion_retries < 4
+                ):
+                    completion_retries += 1
+                    messages.append({"role": "assistant", "content": final_text})
+
+                    reasons = []
+                    if echoed_tool_result:
+                        reasons.append(
+                            "Your last message is a tool-result JSON object, not a user-facing final answer."
+                        )
+                    if missing_artifacts:
+                        reasons.append(
+                            "Required deliverables still missing: "
+                            + ", ".join(missing_artifacts)
+                            + "."
+                        )
+
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "The task is NOT complete. "
+                            + " ".join(reasons)
+                            + " Continue working now using the registered tools. "
+                            "Create any missing files/folders, put the actual implementation in the files, "
+                            "then verify them with read_file or run_command. Do not merely repeat tool output "
+                            "or say 'Task completed'. Once everything exists and is verified, give a concise summary."
+                        ),
+                    })
+                    continue
+
+                if echoed_tool_result or missing_artifacts:
+                    details = []
+                    if echoed_tool_result:
+                        details.append("the model repeatedly echoed tool-result JSON")
+                    if missing_artifacts:
+                        details.append(
+                            "missing deliverables: " + ", ".join(missing_artifacts)
+                        )
+                    final_text = (
+                        "Local Codex could not verify task completion because "
+                        + "; ".join(details)
+                        + ". The model may be too small for this task. "
+                        "Try Groq or a stronger local coding model, then ask it to continue."
+                    )
+
                 self.session_history.extend([
                     {"role": "user", "content": task},
                     {"role": "assistant", "content": final_text},
