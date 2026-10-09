@@ -49,7 +49,7 @@ def _extract_json_object(content):
 
 
 def recover_text_tool_calls(content, available_tools):
-    """Convert JSON-shaped tool calls emitted as text into executable calls."""
+    """Convert JSON-shaped tool calls embedded anywhere in text into executable calls."""
     recovered = []
     seen_calls = set()
     for data in _iter_json_objects(content):
@@ -58,46 +58,48 @@ def recover_text_tool_calls(content, available_tools):
             calls = [data]
 
         for item in calls:
-        if not isinstance(item, dict):
-            continue
-
-        function_data = item.get("function")
-        if not isinstance(function_data, dict):
-            function_data = {}
-
-        name = item.get("name") or function_data.get("name")
-        arguments = item.get("arguments", function_data.get("arguments", {}))
-
-        if not isinstance(name, str) or name not in available_tools:
-            continue
-
-        if isinstance(arguments, str):
-            try:
-                arguments = json.loads(arguments)
-            except json.JSONDecodeError:
+            if not isinstance(item, dict):
                 continue
 
-        if arguments == []:
-            arguments = {}
-        if not isinstance(arguments, dict):
-            continue
+            function_data = item.get("function")
+            if not isinstance(function_data, dict):
+                function_data = {}
 
-        signature = (name, json.dumps(arguments, sort_keys=True, ensure_ascii=False))
-        if signature in seen_calls:
-            continue
-        seen_calls.add(signature)
-        recovered.append(
-            SimpleNamespace(
-                id="call_" + uuid.uuid4().hex,
-                type="function",
-                function=SimpleNamespace(
-                    name=name,
-                    arguments=json.dumps(arguments, ensure_ascii=False),
-                ),
+            name = item.get("name") or function_data.get("name")
+            arguments = item.get("arguments", function_data.get("arguments", {}))
+
+            if not isinstance(name, str) or name not in available_tools:
+                continue
+
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    continue
+
+            if arguments == []:
+                arguments = {}
+            if not isinstance(arguments, dict):
+                continue
+
+            signature = (
+                name,
+                json.dumps(arguments, sort_keys=True, ensure_ascii=False),
             )
-        )
+            if signature in seen_calls:
+                continue
+            seen_calls.add(signature)
+            recovered.append(
+                SimpleNamespace(
+                    id="call_" + uuid.uuid4().hex,
+                    type="function",
+                    function=SimpleNamespace(
+                        name=name,
+                        arguments=json.dumps(arguments, ensure_ascii=False),
+                    ),
+                )
+            )
     return recovered
-
 
 def _is_tool_call_shaped_json(content):
     data = _extract_json_object(content)
