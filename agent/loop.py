@@ -136,6 +136,11 @@ def _expected_artifact_paths(task):
         task,
         flags=re.IGNORECASE,
     ))
+    folders.extend(re.findall(
+        r"\b([A-Za-z0-9_-]+)\s+folder\s+(?:banao|banaye|bana\s+do)",
+        task,
+        flags=re.IGNORECASE,
+    ))
     folders = list(dict.fromkeys(folders))
     # Capture explicitly mentioned source/config files even when the user phrases
     # the request in Hindi/Hinglish ("main.py mein code likho").
