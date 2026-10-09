@@ -164,12 +164,13 @@ def simple_reply(text):
 
     if normalized in {"help", "/help"}:
         return (
-            "What I can do:\n"
-            "  • Create or edit project files\n"
-            "  • Debug errors\n"
-            "  • Explain existing code\n"
-            "  • Run project commands\n\n"
-            "Example: Create a Python calculator in calculator.py"
+            "What I can do:\\n"
+            "  • Inspect, create and edit files\\n"
+            "  • Run commands and tests\\n"
+            "  • Diagnose errors and iterate on fixes\\n"
+            "  • Remember the recent coding conversation\\n\\n"
+            "Commands: /help, /status, /clear, /exit\\n"
+            "Example: Create a Python calculator and run its tests."
         )
 
     # Don't classify ordinary short conversational questions as coding tasks.
@@ -298,12 +299,30 @@ def main():
             print("\nGoodbye! 👋")
             break
 
-        if user_input.lower() == "/help":
+        command = user_input.lower()
+
+        if command == "/help":
             print(simple_reply("/help"))
             print()
             continue
 
-        # Handle greetings without running the planner/workers.
+        if command == "/clear":
+            agent.session_history.clear()
+            UI.success("Conversation context cleared. Project files were not changed.")
+            print()
+            continue
+
+        if command == "/status":
+            print()
+            print(f"  Provider : {provider}")
+            print(f"  Model    : {model}")
+            print(f"  Workspace: {workspace}")
+            print(f"  Tools    : {len(tools)}")
+            print(f"  Memory   : {len(agent.session_history) // 2} recent turns")
+            print()
+            continue
+
+        # Handle greetings without running the coding agent.
         quick_response = simple_reply(user_input)
         if quick_response is not None:
             print()
