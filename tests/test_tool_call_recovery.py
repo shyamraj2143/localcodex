@@ -81,7 +81,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
                         "content": "print('calculator ready')\n",
                     },
                 }),
-                '{"name":"run_command","arguments":{"command":"python -c 'print(123)'"}}',
+                '{"name":"run_command","arguments":{"command":"python -m pip --version"}}',
                 "Created and verified calculator_gui/main.py.",
             ])
 
@@ -139,7 +139,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
                         "content": "print('gui ready')\\n",
                     },
                 }),
-                '{"name":"run_command","arguments":{"command":"python -c 'print(123)'"}}',
+                '{"name":"run_command","arguments":{"command":"python -m pip --version"}}',
                 "Created and verified gui/main.py.",
             ])
             agent = MultiModelAgent(
@@ -180,7 +180,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
                         "content": "print('hello')\n",
                     },
                 }),
-                '{"name":"run_command","arguments":{"command":"python -c 'print(123)'"}}',
+                '{"name":"run_command","arguments":{"command":"python -m pip --version"}}',
                 "Created calculator_gui/main.py and verified it.",
             ])
             agent = MultiModelAgent(
@@ -226,7 +226,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
                         "content": "print('created after duplicate')\\n",
                     },
                 }),
-                '{"name":"run_command","arguments":{"command":"python -c 'print(123)'"}}',
+                '{"name":"run_command","arguments":{"command":"python -m pip --version"}}',
                 "Created and verified gui/main.py.",
             ])
             agent = MultiModelAgent(
