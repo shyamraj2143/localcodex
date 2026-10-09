@@ -19,7 +19,7 @@ class FakeCompletions:
 
 class OllamaToolFallbackTests(unittest.TestCase):
     def test_retries_without_native_tools_and_requests_json_tool_call(self):
-        client = OllamaClient(model="deepseek-coder:1.3b")
+        client = OllamaClient(model="deepseek-coder:1.3b", force_json_tools=False)
         completions = FakeCompletions()
         client.client = SimpleNamespace(
             chat=SimpleNamespace(completions=completions)
