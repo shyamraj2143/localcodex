@@ -120,7 +120,7 @@ def choose_provider(config):
     print("  Select provider / coding model")
     print(
         "  [1] NVIDIA NIM API       — recommended "
-        f"({config.get('nvidia_model', 'poolside/laguna-xs-2.1')})"
+        f"({config.get('nvidia_model', 'qwen/qwen2.5-coder-32b-instruct')})"
     )
     print("  [2] Groq API             — online")
     print(
@@ -270,7 +270,7 @@ def main():
     if provider == "ollama":
         model = config.get("local_model", "qwen2.5-coder:1.5b")
     elif provider in {"nvidia", "nvidia_nim"}:
-        model = config.get("nvidia_model", "poolside/laguna-xs-2.1")
+        model = config.get("nvidia_model", "qwen/qwen2.5-coder-32b-instruct")
     else:
         model = config.get("models", {}).get("coder", "Not configured")
 
