@@ -21,42 +21,43 @@ MAX_TOOL_RESULT_CHARS = 16000
 MAX_SESSION_TURNS = 8
 
 
-def _extract_json_object(content):
-    """Parse a JSON object from plain text or a fenced code block."""
+def _iter_json_objects(content):
+    """Yield JSON objects embedded in plain text, including multiple fenced blocks."""
     if not isinstance(content, str) or not content.strip():
-        return None
+        return
 
-    text = content.strip()
-    text = re.sub(r"^\`\`\`(?:json)?\s*|\s*\`\`\`$", "", text, flags=re.IGNORECASE).strip()
-
-    candidates = [text]
-    start = text.find("{")
-    end = text.rfind("}")
-    if start >= 0 and end > start:
-        candidates.append(text[start:end + 1])
-
-    for candidate in candidates:
+    decoder = json.JSONDecoder()
+    seen = set()
+    for match in re.finditer(r"\{", content):
+        start = match.start()
         try:
-            parsed = json.loads(candidate)
-            if isinstance(parsed, dict):
-                return parsed
-        except (json.JSONDecodeError, TypeError):
+            parsed, end = decoder.raw_decode(content[start:])
+        except json.JSONDecodeError:
             continue
-    return None
+        if not isinstance(parsed, dict):
+            continue
+        fingerprint = json.dumps(parsed, sort_keys=True, ensure_ascii=False)
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        yield parsed
+
+
+def _extract_json_object(content):
+    """Parse the first JSON object from plain text or a fenced code block."""
+    return next(_iter_json_objects(content), None)
 
 
 def recover_text_tool_calls(content, available_tools):
     """Convert JSON-shaped tool calls emitted as text into executable calls."""
-    data = _extract_json_object(content)
-    if not isinstance(data, dict):
-        return []
-
-    calls = data.get("tool_calls")
-    if not isinstance(calls, list):
-        calls = [data]
-
     recovered = []
-    for item in calls:
+    seen_calls = set()
+    for data in _iter_json_objects(content):
+        calls = data.get("tool_calls")
+        if not isinstance(calls, list):
+            calls = [data]
+
+        for item in calls:
         if not isinstance(item, dict):
             continue
 
@@ -81,6 +82,10 @@ def recover_text_tool_calls(content, available_tools):
         if not isinstance(arguments, dict):
             continue
 
+        signature = (name, json.dumps(arguments, sort_keys=True, ensure_ascii=False))
+        if signature in seen_calls:
+            continue
+        seen_calls.add(signature)
         recovered.append(
             SimpleNamespace(
                 id="call_" + uuid.uuid4().hex,
