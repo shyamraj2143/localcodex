@@ -335,6 +335,10 @@ class MultiModelAgent:
 
         tools_description = ", ".join(sorted(self.tools))
         provider = str(self.config.get("provider", "groq")).lower()
+        local_json_mode = (
+            provider in {"ollama", "local"}
+            and bool(self.config.get("ollama_force_json_tools", True))
+        )
         tool_catalog = json.dumps(
             [
                 {
@@ -548,13 +552,21 @@ Workspace root is the current directory. Keep file operations inside it.
                 self.session_history = self.session_history[-(MAX_SESSION_TURNS * 2):]
                 return final_text
 
-            if recovered:
+            # In local JSON-tool mode, keep the transcript as ordinary user/assistant
+            # messages. Synthetic assistant tool_calls + role=tool messages are often
+            # mishandled by small Ollama models because no native tool schema was sent.
+            if local_json_mode and recovered:
+                messages.append({
+                    "role": "assistant",
+                    "content": getattr(message, "content", None) or "",
+                })
+            elif recovered:
                 messages.append(self._assistant_tool_call_message(tool_calls))
             else:
                 messages.append(message)
 
-            # Execute requested tools, but prevent the model from repeating a
-            # successful mutation forever (a common failure in weaker tool-use models).
+            # Execute one-action-at-a-time tool requests and give local models readable
+            # results instead of a synthetic tool-call protocol they may echo forever.
             duplicate_mutation = False
             for tool_call in tool_calls:
                 name = tool_call.function.name
@@ -568,43 +580,62 @@ Workspace root is the current directory. Keep file operations inside it.
                 )
 
                 if name in {"create_folder", "write_file", "edit_file"} and signature in successful_mutation_calls:
+                    tool_result = {
+                        "success": False,
+                        "error": (
+                            "Duplicate mutation blocked: this exact action already "
+                            "succeeded. Choose the next missing step."
+                        ),
+                    }
+                    duplicate_mutation = True
+                    tool_message = None
+                else:
+                    tool_message = self._tool_message(tool_call)
+                    try:
+                        tool_result = json.loads(tool_message["content"])
+                    except (json.JSONDecodeError, TypeError):
+                        tool_result = {"success": False, "error": tool_message["content"]}
+
+                    if (
+                        name in {"create_folder", "write_file", "edit_file"}
+                        and isinstance(tool_result, dict)
+                        and tool_result.get("success") is True
+                    ):
+                        successful_mutation_calls.add(signature)
+
+                if local_json_mode and recovered:
+                    readable_result = json.dumps(
+                        tool_result, ensure_ascii=False, default=str
+                    )[:MAX_TOOL_RESULT_CHARS]
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"RESULT of tool {name} with arguments "
+                            f"{json.dumps(arguments, ensure_ascii=False)}: "
+                            f"{readable_result}\n\n"
+                            "Continue the original task from this real result. "
+                            "Choose the next distinct action as exactly one JSON object. "
+                            "Do not repeat a successful action. If implementation is written, "
+                            "run a relevant check and inspect the result before finishing."
+                        ),
+                    })
+                elif duplicate_mutation:
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
-                        "content": json.dumps({
-                            "success": False,
-                            "error": (
-                                "Duplicate mutation blocked: this exact action already "
-                                "succeeded. Do not repeat it. Choose the next missing step."
-                            ),
-                        }),
+                        "content": json.dumps(tool_result, ensure_ascii=False),
                     })
-                    duplicate_mutation = True
-                    continue
-
-                tool_message = self._tool_message(tool_call)
-                messages.append(tool_message)
-                try:
-                    tool_result = json.loads(tool_message["content"])
-                except (json.JSONDecodeError, TypeError):
-                    tool_result = {}
-                if (
-                    name in {"create_folder", "write_file", "edit_file"}
-                    and isinstance(tool_result, dict)
-                    and tool_result.get("success") is True
-                ):
-                    successful_mutation_calls.add(signature)
+                else:
+                    messages.append(tool_message)
 
             if duplicate_mutation:
                 messages.append({
                     "role": "user",
                     "content": (
-                        "You repeated a file/folder mutation that already succeeded. "
-                        "Do not output explanatory prose or repeat the same JSON. "
-                        "Continue the original task with the next distinct action. "
-                        "For a requested source file, call write_file with the complete "
-                        "implementation, then run_command for a syntax check and inspect "
-                        "the result. Only finish after checking the actual workspace."
+                        "A repeated file/folder mutation was blocked. Continue the original "
+                        "task with the next distinct action; do not repeat the same JSON. "
+                        "Write the actual implementation, then run a syntax check/test and "
+                        "inspect the result. Finish only after verifying the workspace."
                     ),
                 })
 
