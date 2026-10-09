@@ -352,6 +352,8 @@ Workspace root is the current directory. Keep file operations inside it.
 
         malformed_tool_retries = 0
         completion_retries = 0
+        empty_response_retries = 0
+        disable_tools_next = False
         recent_user_tasks = [
             item.get("content", "")
             for item in self.session_history
@@ -361,7 +363,9 @@ Workspace root is the current directory. Keep file operations inside it.
 
         for step in range(self.max_steps):
             self.show_status(f"Thinking · step {step + 1}/{self.max_steps}")
-            response = client.chat(messages, tools=self.tool_schemas)
+            request_tools = None if disable_tools_next else self.tool_schemas
+            disable_tools_next = False
+            response = client.chat(messages, tools=request_tools)
             message = response.choices[0].message
             native_calls = getattr(message, "tool_calls", None) or []
             tool_calls = list(native_calls)
@@ -372,11 +376,36 @@ Workspace root is the current directory. Keep file operations inside it.
                 recovered = bool(tool_calls)
 
             if not tool_calls:
-                final_text = (getattr(message, "content", None) or "").strip()
+                raw_content = getattr(message, "content", None)
+                final_text = (raw_content or "").strip()
+
+                # Small local models occasionally return an empty assistant message
+                # when tool schemas are included. Retry with a shorter instruction and
+                # no schemas once, allowing the model to emit a recoverable JSON call.
+                if not final_text and empty_response_retries < 3:
+                    empty_response_retries += 1
+                    if raw_content is not None:
+                        messages.append({"role": "assistant", "content": raw_content})
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "Your previous response was empty. Continue the coding task. "
+                            "Do not return an empty response. Choose the next action and "
+                            "use exactly one JSON object like "
+                            '{"name":"list_files","arguments":{}} '
+                            "with a registered tool name and an arguments object, or provide "
+                            "a concise final answer only after the task is complete."
+                        ),
+                    })
+                    disable_tools_next = True
+                    continue
+
                 if not final_text:
                     final_text = (
-                        "I couldn't complete the task because the model returned no final response. "
-                        "Try again or use a stronger coding model."
+                        "The model returned an empty response after 3 retries. "
+                        "This often happens when a small Ollama model cannot handle the "
+                        "tool-calling prompt. Try option 3 (DeepSeek-Coder 1.3B) or Groq, "
+                        "and check ollama list to confirm the selected model is installed."
                     )
 
                 if (
