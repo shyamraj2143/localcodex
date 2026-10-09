@@ -598,7 +598,15 @@ Workspace root is the current directory. Keep file operations inside it.
         print(" LOCAL CODEX · CODING SESSION")
         print("=" * 60)
         print(f" Workspace: {self.workspace}")
-        print(f" Provider : {self.config.get('provider', 'groq')}")
+        provider = str(self.config.get("provider", "groq")).lower()
+        if provider in {"nvidia", "nvidia_nim"}:
+            model = self.config.get("nvidia_model", "qwen/qwen2.5-coder-32b-instruct")
+        elif provider in {"ollama", "local"}:
+            model = self.config.get("local_model", "qwen2.5-coder:1.5b")
+        else:
+            model = self.config.get("models", {}).get("coder", "not configured")
+        print(f" Provider : {provider}")
+        print(f" Model    : {model}")
         print(f" Tools    : {len(self.tools)}")
         print("-" * 60)
 
