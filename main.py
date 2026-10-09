@@ -142,7 +142,9 @@ def choose_provider(config):
         config["provider"] = "groq"
     elif choice == "3":
         config["provider"] = "ollama"
-        config["local_model"] = "qwen2.5-coder:1.5b"
+        # Respect config.json so users can select a stronger locally installed
+        # coding model without main.py silently forcing the 1.5B model.
+        config["local_model"] = config.get("local_model", "qwen2.5-coder:1.5b")
     elif choice == "4":
         config["provider"] = "ollama"
         config["local_model"] = "deepseek-coder:1.3b"
