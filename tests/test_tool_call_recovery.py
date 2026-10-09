@@ -245,7 +245,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
             with open(target, "r", encoding="utf-8") as file:
                 self.assertEqual(file.read(), "print('created after duplicate')\\n")
             self.assertEqual(result, "Created and verified gui/main.py.")
-            self.assertEqual(len(fake_client.messages_seen), 4)
+            self.assertEqual(len(fake_client.messages_seen), 5)
 
 if __name__ == "__main__":
     unittest.main()
