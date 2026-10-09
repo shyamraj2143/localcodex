@@ -354,31 +354,6 @@ class MultiModelAgent:
             provider in {"ollama", "local"}
             and bool(self.config.get("ollama_force_json_tools", True))
         )
-        tool_catalog = json.dumps(
-            [
-                {
-                    "name": schema.get("function", {}).get("name"),
-                    "description": schema.get("function", {}).get("description", ""),
-                    "parameters": schema.get("function", {}).get("parameters", {}),
-                }
-                for schema in self.tool_schemas
-                if isinstance(schema, dict) and isinstance(schema.get("function"), dict)
-            ],
-            ensure_ascii=False,
-        )
-        local_mode_rules = ""
-        if provider in {"ollama", "local"}:
-            local_mode_rules = f"""
-LOCAL MODEL MODE (important):
-- You may be a small model, so work in short, concrete steps. Do not plan the entire project in one response.
-- Tool catalogue with exact parameter names: {tool_catalog}
-- Return one action at a time as JSON only when using tools: {{"name":"TOOL_NAME","arguments":{{...}}}}.
-- Never return fenced JSON, a list of actions, or prose around a tool call.
-- After every tool result, decide the NEXT distinct action. Do not repeat successful folder creation.
-- For code requests, write a complete runnable first version before polishing.
-- Then run a syntax check or test, read the error if it fails, fix it, and rerun the check.
-- Do not claim success from a plan; verify files and command output.
-"""
         if provider in {"ollama", "local"}:
             # Small local models perform better with a compact, non-duplicated prompt.
             # The full tool schemas are supplied by OllamaClient's JSON protocol.
@@ -495,10 +470,10 @@ Workspace root is the current directory. Keep file operations inside it.
 
                 if not final_text:
                     final_text = (
-                        "The model returned an empty response after 3 retries. "
-                        "This often happens when a small Ollama model cannot handle the "
-                        "tool-calling prompt. Try option 3 (DeepSeek-Coder 1.3B) or Groq, "
-                        "and check ollama list to confirm the selected model is installed."
+                        "The local model returned an empty response after 3 retries. "
+                        "Check that Ollama is running and the selected model is installed "
+                        "with 'ollama list'. Very small models may struggle with multi-step "
+                        "coding; try a stronger local coding model if memory permits."
                     )
 
                 if (
