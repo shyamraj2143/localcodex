@@ -15,7 +15,7 @@ load_dotenv(os.path.join(BASE_DIR, ".env"), override=True)
 class NvidiaClient:
     def __init__(
         self,
-        model="poolside/laguna-xs-2.1",
+        model="qwen/qwen2.5-coder-32b-instruct",
         base_url="https://integrate.api.nvidia.com/v1",
         temperature=0.1,
         max_tokens=8192,
