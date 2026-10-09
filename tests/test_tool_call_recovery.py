@@ -105,6 +105,8 @@ class RecoverTextToolCallTests(unittest.TestCase):
             self.assertTrue(os.path.isfile(target))
             with open(target, "r", encoding="utf-8") as file:
                 self.assertEqual(file.read(), "print('calculator ready')\n")
+            with open(target, "r", encoding="utf-8") as file:
+                compile(file.read(), target, "exec")
             self.assertEqual(result, "Created and verified calculator_gui/main.py.")
             self.assertEqual(len(fake_client.messages_seen), 4)
             # The echoed JSON response is treated as an intermediate result, not final output.
