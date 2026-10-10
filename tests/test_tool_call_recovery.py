@@ -81,6 +81,70 @@ class RecoverTextToolCallTests(unittest.TestCase):
             ["main.py"],
         )
 
+    def test_expected_artifacts_understand_quoted_hinglish_folder_and_uske_andar(self):
+        task = (
+            "Ek folder `codex_smoke_test` banao. Uske andar `main.py` mein add/subtract "
+            "functions likho aur `test_main.py` mein unittest tests banao."
+        )
+        self.assertEqual(
+            _expected_artifact_paths(task),
+            [
+                "codex_smoke_test",
+                "codex_smoke_test/main.py",
+                "codex_smoke_test/test_main.py",
+            ],
+        )
+
+    def test_repeated_local_tool_call_falls_back_to_file_generation_and_runs_tests(self):
+        task = (
+            "Ek folder `codex_smoke_test` banao. Uske andar `main.py` mein add(a, b) "
+            "aur subtract(a, b) functions likho. `test_main.py` mein unittest tests banao."
+        )
+        generated = json.dumps({
+            "files": {
+                "codex_smoke_test/main.py": (
+                    "def add(a, b):\\n    return a + b\\n\\n"
+                    "def subtract(a, b):\\n    return a - b\\n"
+                ),
+                "codex_smoke_test/test_main.py": (
+                    "import unittest\\nfrom main import add, subtract\\n\\n"
+                    "class TestArithmetic(unittest.TestCase):\\n"
+                    "    def test_add(self):\\n        self.assertEqual(add(2, 3), 5)\\n\\n"
+                    "    def test_subtract(self):\\n        self.assertEqual(subtract(5, 3), 2)\\n\\n"
+                    "if __name__ == '__main__':\\n    unittest.main()\\n"
+                ),
+            }
+        })
+        with tempfile.TemporaryDirectory() as workspace:
+            fake_client = FakeClient([
+                '{"name":"create_folder","arguments":{"path":"codex_smoke_test"}}',
+                '{"name":"create_folder","arguments":{"path":"codex_smoke_test"}}',
+                generated,
+            ])
+            agent = MultiModelAgent(
+                config={"provider": "ollama", "local_model": "test-model", "max_agent_steps": 24},
+                tools={
+                    "create_folder": create_folder,
+                    "write_file": write_file,
+                    "run_command": run_command,
+                },
+                tool_schemas=[],
+                workspace=workspace,
+            )
+            agent.get_client = lambda role="coder": fake_client
+            result = agent.integrate(task, [])
+
+            main_path = os.path.join(workspace, "codex_smoke_test", "main.py")
+            test_path = os.path.join(workspace, "codex_smoke_test", "test_main.py")
+            self.assertTrue(os.path.isfile(main_path))
+            self.assertTrue(os.path.isfile(test_path))
+            self.assertEqual(len(fake_client.messages_seen), 3)
+            self.assertIsNone(fake_client.tools_seen[2])
+            self.assertIn("Verification status: PASS", result)
+            self.assertIn("unittest discover", result)
+            self.assertIn("codex_smoke_test/main.py", result)
+            self.assertIn("codex_smoke_test/test_main.py", result)
+
     def test_integrate_recovers_echo_and_continues_to_create_file(self):
         with tempfile.TemporaryDirectory() as workspace:
             fake_client = FakeClient([
