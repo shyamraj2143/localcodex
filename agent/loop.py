@@ -186,7 +186,7 @@ def _expected_artifact_paths(task):
         re.search(
             r"\binside\s+(?:it|that folder|the folder)\b|"
             r"\b(folder|directory)\s+ke\s+andar\b|"
-            r"\busme\b",
+            r"\busme\b|\buske\s+andar\b|\bus\s+folder\s+ke\s+andar\b",
             task,
             re.IGNORECASE,
         )
