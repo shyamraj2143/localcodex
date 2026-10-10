@@ -255,7 +255,8 @@ class MultiModelAgent:
             and meaningful[-1].get("return_code") == 0
         )
         static_pass = all(item.get("success") for item in latest_checks.values())
-        if changed and latest_meaningful_pass and static_pass:
+        missing_artifacts = self._missing_expected_artifacts(report.get("task", ""))
+        if changed and latest_meaningful_pass and static_pass and not missing_artifacts:
             lines.append("Verification status: PASS — automatic file checks and the latest relevant test/check command passed.")
         elif changed:
             reasons = []
@@ -263,9 +264,14 @@ class MultiModelAgent:
                 reasons.append("no successful relevant test/syntax/build command was recorded after the changes")
             if not static_pass:
                 reasons.append("one or more latest automatic file checks failed")
+            if missing_artifacts:
+                reasons.append("requested deliverables are still missing: " + ", ".join(missing_artifacts))
             lines.append("Verification status: PARTIAL — " + "; ".join(reasons) + ".")
         else:
-            lines.append("Verification status: no file modifications were recorded; review the task summary above.")
+            if missing_artifacts:
+                lines.append("Verification status: FAIL — requested deliverables are missing: " + ", ".join(missing_artifacts) + ".")
+            else:
+                lines.append("Verification status: no file modifications were recorded; review the task summary above.")
         return "\n".join(line for line in lines if line is not None)
 
     def _missing_expected_artifacts(self, task_context):
