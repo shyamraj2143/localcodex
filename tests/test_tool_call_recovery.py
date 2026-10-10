@@ -93,6 +93,74 @@ class RecoverTextToolCallTests(unittest.TestCase):
             self.assertIn("calculator.py", report)
             self.assertNotIn("Verification status: PASS", report)
 
+    def test_local_model_premature_done_recovers_calculator_implementation(self):
+        generated = json.dumps({
+            "files": {
+                "calculator.py": (
+                    "def add(a, b):\\n    return a + b\\n\\n"
+                    "def subtract(a, b):\\n    return a - b\\n\\n"
+                    "def multiply(a, b):\\n    return a * b\\n\\n"
+                    "def divide(a, b):\\n    if b == 0: raise ZeroDivisionError('division by zero')\\n    return a / b\\n"
+                ),
+                "test_calculator.py": (
+                    "import unittest\\nfrom calculator import add, subtract, multiply, divide\\n\\n"
+                    "class CalculatorTests(unittest.TestCase):\\n"
+                    "    def test_add(self): self.assertEqual(add(2, 3), 5)\\n"
+                    "    def test_subtract(self): self.assertEqual(subtract(5, 3), 2)\\n"
+                    "    def test_multiply(self): self.assertEqual(multiply(2, 3), 6)\\n"
+                    "    def test_divide_by_zero(self):\\n"
+                    "        with self.assertRaises(ZeroDivisionError): divide(2, 0)\\n\\n"
+                    "if __name__ == '__main__': unittest.main()\\n"
+                ),
+            }
+        })
+        with tempfile.TemporaryDirectory() as workspace:
+            fake_client = FakeClient(["Task completed.", "Task completed.", generated])
+            agent = MultiModelAgent(
+                config={"provider": "ollama", "local_model": "test-model", "max_agent_steps": 24},
+                tools={"write_file": write_file, "run_command": run_command},
+                tool_schemas=[],
+                workspace=workspace,
+            )
+            agent.get_client = lambda role="coder": fake_client
+            result = agent.integrate("create a calculator system", [])
+
+            self.assertTrue(os.path.isfile(os.path.join(workspace, "calculator.py")))
+            self.assertTrue(os.path.isfile(os.path.join(workspace, "test_calculator.py")))
+            self.assertIn("Verification status: PASS", result)
+            self.assertIn("Ran 4 tests", result)
+            self.assertEqual(len(fake_client.messages_seen), 3)
+
+    def test_distinct_nonproductive_folder_actions_trigger_recovery_before_step_limit(self):
+        generated = json.dumps({
+            "files": {
+                "calculator.py": "def add(a, b):\\n    return a + b\\n",
+                "test_calculator.py": (
+                    "import unittest\\nfrom calculator import add\\n"
+                    "class TestCalculator(unittest.TestCase):\\n"
+                    "    def test_add(self): self.assertEqual(add(2, 3), 5)\\n"
+                ),
+            }
+        })
+        responses = [
+            json.dumps({"name": "create_folder", "arguments": {"path": f"unused_{i}"}})
+            for i in range(4)
+        ] + [generated]
+        with tempfile.TemporaryDirectory() as workspace:
+            fake_client = FakeClient(responses)
+            agent = MultiModelAgent(
+                config={"provider": "ollama", "local_model": "test-model", "max_agent_steps": 24},
+                tools={"create_folder": create_folder, "write_file": write_file, "run_command": run_command},
+                tool_schemas=[],
+                workspace=workspace,
+            )
+            agent.get_client = lambda role="coder": fake_client
+            result = agent.integrate("create a calculator system", [])
+
+            self.assertTrue(os.path.isfile(os.path.join(workspace, "calculator.py")))
+            self.assertIn("Verification status: PASS", result)
+            self.assertEqual(len(fake_client.messages_seen), 5)
+
     def test_expected_artifacts_include_file_inside_named_folder(self):
         paths = _expected_artifact_paths(
             "Create a folder named calculator_gui. Inside it, create main.py containing code."
