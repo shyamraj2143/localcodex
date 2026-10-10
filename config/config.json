@@ -1,6 +1,6 @@
 {
     "provider": "nvidia",
-    "local_model": "qwen2.5-coder:1.5b",
+    "local_model": "qwen2.5-coder:3b",
     "ollama_base_url": "http://localhost:11434/v1",
     "models": {
         "planner": "openai/gpt-oss-120b",
