@@ -639,6 +639,9 @@ Workspace root is the current directory. Keep file operations inside it.
         successful_mutation_calls = set()
         executed_tool_calls = 0
         mutation_needs_verification = False
+        last_action_signature = None
+        repeated_action_count = 0
+        local_fallback_attempted = False
         recent_user_tasks = [
             item.get("content", "")
             for item in self.session_history
@@ -819,6 +822,11 @@ Workspace root is the current directory. Keep file operations inside it.
                     name,
                     json.dumps(arguments, sort_keys=True, ensure_ascii=False),
                 )
+                if signature == last_action_signature:
+                    repeated_action_count += 1
+                else:
+                    last_action_signature = signature
+                    repeated_action_count = 1
 
                 if name in {"create_folder", "write_file", "edit_file"} and signature in successful_mutation_calls:
                     tool_result = {
@@ -911,6 +919,38 @@ Workspace root is the current directory. Keep file operations inside it.
                         "inspect the result. Finish only after verifying the workspace."
                     ),
                 })
+
+            # Recover from a local model repeating the same tool action. We bypass
+            # the tool protocol, request a constrained file map, and accept only
+            # explicitly requested relative paths.
+            if (
+                local_json_mode
+                and not local_fallback_attempted
+                and repeated_action_count >= 2
+            ):
+                missing = self._missing_expected_artifacts(task_context)
+                if missing:
+                    local_fallback_attempted = True
+                    self.show_status("Repeated action detected; recovering missing deliverables")
+                    recovered_files = self._generate_missing_files_locally(
+                        client, task_context, _expected_artifact_paths(task_context)
+                    )
+                    if recovered_files:
+                        summary = (
+                            "Recovered from a repeated tool-call loop. Requested files were written "
+                            "and the available verification command was run."
+                        )
+                        self.session_history.extend([
+                            {"role": "user", "content": task},
+                            {"role": "assistant", "content": summary},
+                        ])
+                        self.session_history = self.session_history[-(MAX_SESSION_TURNS * 2):]
+                        return self._format_final_report(summary)
+                    return self._format_final_report(
+                        "Local Codex detected a repeated tool-call loop and tried file-generation recovery, "
+                        "but it could not produce all requested files with a passing verification command. "
+                        "The task is NOT marked successful; inspect the reported checks and try a stronger model."
+                    )
 
         limit_message = (
             f"Stopped after {self.max_steps} tool steps to avoid an infinite loop. "
