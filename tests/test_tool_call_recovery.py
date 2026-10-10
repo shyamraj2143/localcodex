@@ -63,6 +63,12 @@ class RecoverTextToolCallTests(unittest.TestCase):
             '{"name":"create_folder","arguments":{"path":"gui"}}'
         ))
 
+    def test_underspecified_calculator_task_gets_testable_default_deliverables(self):
+        self.assertEqual(
+            _expected_artifact_paths("create a calculator system"),
+            ["calculator.py", "test_calculator.py"],
+        )
+
     def test_expected_artifacts_include_file_inside_named_folder(self):
         paths = _expected_artifact_paths(
             "Create a folder named calculator_gui. Inside it, create main.py containing code."
