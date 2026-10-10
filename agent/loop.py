@@ -146,13 +146,13 @@ def _expected_artifact_paths(task):
         return []
 
     folders = re.findall(
-        r"\\bfolder\\s+(?:named|called|name|ka\\s+naam)\\s+['\" ]?([A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*)",
+        r"\bfolder\s+(?:named|called|name|ka\s+naam)\s+[\x60'"]?([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)",
         task,
         flags=re.IGNORECASE,
     )
-    # Hinglish commonly puts the folder name after 'folder' and before 'banao'.
+    # Hinglish commonly puts the folder name after "folder" and before "banao".
     folders.extend(re.findall(
-        r"\\bfolder\\s+['\" ]?([A-Za-z0-9_-]+)['\" ]?\\s+(?:banao|banaye|bana\\s+do|create\\s+karo)",
+        r"\bfolder\s+[\x60'"]?([A-Za-z0-9_-]+)[\x60'"]?\s+(?:banao|banaye|bana\s+do|create\s+karo)",
         task,
         flags=re.IGNORECASE,
     ))
