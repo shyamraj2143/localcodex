@@ -253,6 +253,10 @@ class MultiModelAgent:
             for item in commands[-8:]:
                 state = "PASS" if item.get("success") and item.get("return_code") == 0 else "FAIL"
                 lines.append(f"- {state} [{item.get('return_code', 'unknown')}] {item.get('command', '')}")
+                output = (str(item.get("stdout", "")) + "\\n" + str(item.get("stderr", ""))).strip()
+                if output:
+                    compact_output = output[-1200:].replace("\\n", " | ")
+                    lines.append(f"  Actual output: {compact_output}")
 
         meaningful = [item for item in commands if item.get("meaningful_check")]
         latest_meaningful_pass = bool(
@@ -412,6 +416,8 @@ class MultiModelAgent:
                         "command": command,
                         "return_code": result.get("return_code") if isinstance(result, dict) else None,
                         "success": isinstance(result, dict) and result.get("success") is True,
+                        "stdout": result.get("stdout", "") if isinstance(result, dict) else "",
+                        "stderr": result.get("stderr", "") if isinstance(result, dict) else "",
                         "meaningful_check": _is_meaningful_verification_command(command),
                     }
                     self.last_task_report["commands"].append(record)
@@ -954,6 +960,8 @@ Workspace root is the current directory. Keep file operations inside it.
                         "command": command,
                         "return_code": tool_result.get("return_code"),
                         "success": tool_result.get("success") is True,
+                        "stdout": tool_result.get("stdout", ""),
+                        "stderr": tool_result.get("stderr", ""),
                         "meaningful_check": _is_meaningful_verification_command(command),
                     }
                     self.last_task_report["commands"].append(record)
