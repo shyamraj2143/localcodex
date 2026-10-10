@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from agent.groq import GroqClient
 from agent.nvidia import NvidiaClient
 from agent.ollama import OllamaClient
+from agent.verification import verify_changed_file
 
 
 MAX_TOOL_RESULT_CHARS = 16000
@@ -120,6 +121,24 @@ def _is_tool_result_json(content):
     return bool(result_fields.intersection(data))
 
 
+def _is_meaningful_verification_command(command):
+    """Reject unrelated successful commands (for example, pip --version) as code verification."""
+    if not isinstance(command, str):
+        return False
+    command = command.lower()
+    patterns = (
+        r"\bpytest\b", r"\bunittest\b", r"\bcompileall\b",
+        r"\bpy_compile\b", r"\bnode\s+--check\b",
+        r"\bnpm\s+(?:test|run\s+(?:test|build|lint|typecheck))\b",
+        r"\bnpx\s+(?:tsc|eslint|vitest|jest)\b",
+        r"\btsc\s+--noemit\b", r"\beslint\b", r"\bprettier\s+--check\b",
+        r"\bruff\s+check\b", r"\bmypy\b", r"\bgo\s+test\b",
+        r"\bcargo\s+test\b", r"\bmvn\s+test\b", r"\bgradle\s+test\b",
+        r"\bphp\s+-l\b", r"\bdotnet\s+test\b",
+    )
+    return any(re.search(pattern, command) for pattern in patterns)
+
+
 def _expected_artifact_paths(task):
     """Infer explicit file/folder deliverables so premature 'done' is caught."""
     if not isinstance(task, str):
@@ -189,6 +208,52 @@ class MultiModelAgent:
         self.max_workers = max(1, min(int(config.get("max_parallel_workers", 1)), 4))
         self.max_steps = max(1, min(int(config.get("max_agent_steps", 20)), 40))
         self.session_history = []
+        self.last_task_report = {}
+
+    def _format_final_report(self, summary):
+        """Append a factual execution report based only on recorded tool results."""
+        report = self.last_task_report or {}
+        changed = list(dict.fromkeys(report.get("changed_files", [])))
+        commands = report.get("commands", [])
+        checks = report.get("static_checks", [])
+
+        lines = [str(summary or "").strip(), "", "Execution report:"]
+        lines.append("Files changed: " + (", ".join(changed) if changed else "none recorded"))
+
+        latest_checks = {}
+        for item in checks:
+            latest_checks[item.get("path", "unknown")] = item
+        if latest_checks:
+            lines.append("Automatic file checks:")
+            for path, item in latest_checks.items():
+                state = "PASS" if item.get("success") else "FAIL"
+                details = "; ".join(item.get("checks", []) + item.get("errors", []))
+                lines.append(f"- {state} {path}" + (f" — {details}" if details else ""))
+
+        if commands:
+            lines.append("Commands executed:")
+            for item in commands[-8:]:
+                state = "PASS" if item.get("success") and item.get("return_code") == 0 else "FAIL"
+                lines.append(f"- {state} [{item.get('return_code', 'unknown')}] {item.get('command', '')}")
+
+        meaningful = [item for item in commands if item.get("meaningful_check")]
+        latest_meaningful_pass = bool(
+            meaningful and meaningful[-1].get("success")
+            and meaningful[-1].get("return_code") == 0
+        )
+        static_pass = all(item.get("success") for item in latest_checks.values())
+        if changed and latest_meaningful_pass and static_pass:
+            lines.append("Verification status: PASS — automatic file checks and the latest relevant test/check command passed.")
+        elif changed:
+            reasons = []
+            if not latest_meaningful_pass:
+                reasons.append("no successful relevant test/syntax/build command was recorded after the changes")
+            if not static_pass:
+                reasons.append("one or more latest automatic file checks failed")
+            lines.append("Verification status: PARTIAL — " + "; ".join(reasons) + ".")
+        else:
+            lines.append("Verification status: no file modifications were recorded; review the task summary above.")
+        return "\n".join(line for line in lines if line is not None)
 
     def show_status(self, message):
         if self.status_callback:
@@ -355,6 +420,12 @@ class MultiModelAgent:
         """Run the actual coding task until the model finishes or hits the step cap."""
         self.show_status("Thinking")
         client = self.get_client("coder")
+        self.last_task_report = {
+            "task": task,
+            "changed_files": [],
+            "commands": [],
+            "static_checks": [],
+        }
 
         tools_description = ", ".join(sorted(self.tools))
         provider = str(self.config.get("provider", "groq")).lower()
@@ -582,7 +653,7 @@ Workspace root is the current directory. Keep file operations inside it.
                     {"role": "assistant", "content": final_text},
                 ])
                 self.session_history = self.session_history[-(MAX_SESSION_TURNS * 2):]
-                return final_text
+                return self._format_final_report(final_text)
 
             # In local JSON-tool mode, keep the transcript as ordinary user/assistant
             # messages. Synthetic assistant tool_calls + role=tool messages are often
@@ -641,14 +712,31 @@ Workspace root is the current directory. Keep file operations inside it.
                     and isinstance(tool_result, dict)
                     and tool_result.get("success") is True
                 ):
-                    mutation_needs_verification = True
-                if (
-                    name == "run_command"
-                    and isinstance(tool_result, dict)
-                    and tool_result.get("success") is True
-                    and tool_result.get("return_code", 1) == 0
-                ):
-                    mutation_needs_verification = False
+                    path = arguments.get("path", "")
+                    if path:
+                        if path not in self.last_task_report["changed_files"]:
+                            self.last_task_report["changed_files"].append(path)
+                        verification = verify_changed_file(self.workspace, path)
+                        self.last_task_report["static_checks"].append(verification)
+                        tool_result["verification"] = verification
+                        mutation_needs_verification = True
+                        if not verification.get("success"):
+                            self.show_status(f"Automatic verification failed for {path}")
+                if name == "run_command" and isinstance(tool_result, dict):
+                    command = str(arguments.get("command", ""))
+                    record = {
+                        "command": command,
+                        "return_code": tool_result.get("return_code"),
+                        "success": tool_result.get("success") is True,
+                        "meaningful_check": _is_meaningful_verification_command(command),
+                    }
+                    self.last_task_report["commands"].append(record)
+                    if (
+                        record["meaningful_check"]
+                        and record["success"]
+                        and record["return_code"] == 0
+                    ):
+                        mutation_needs_verification = False
 
                 if local_json_mode and recovered:
                     readable_result = json.dumps(
@@ -695,7 +783,7 @@ Workspace root is the current directory. Keep file operations inside it.
             {"role": "assistant", "content": limit_message},
         ])
         self.session_history = self.session_history[-(MAX_SESSION_TURNS * 2):]
-        return limit_message
+        return self._format_final_report(limit_message)
 
     def run(self, task):
         """Run one task with a single persistent tool-using coding agent."""
