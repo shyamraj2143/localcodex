@@ -93,7 +93,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
                         "content": "print('calculator ready')\n",
                     },
                 }),
-                '{"name":"run_command","arguments":{"command":"python -m pip --version"}}',
+                '{"name":"run_command","arguments":{"command":"python -m compileall -q ."}}',
                 "Created and verified calculator_gui/main.py.",
             ])
 
@@ -124,7 +124,8 @@ class RecoverTextToolCallTests(unittest.TestCase):
                 self.assertEqual(file.read(), "print('calculator ready')\n")
             with open(target, "r", encoding="utf-8") as file:
                 compile(file.read(), target, "exec")
-            self.assertEqual(result, "Created and verified calculator_gui/main.py.")
+            self.assertIn("Created and verified calculator_gui/main.py.", result)
+            self.assertIn("Verification status: PASS", result)
             self.assertEqual(len(fake_client.messages_seen), 5)
             # The echoed JSON response is treated as an intermediate result, not final output.
             self.assertIn(
@@ -148,10 +149,10 @@ class RecoverTextToolCallTests(unittest.TestCase):
                     "name": "write_file",
                     "arguments": {
                         "path": "gui/main.py",
-                        "content": "print('gui ready')\\n",
+                        "content": "print('gui ready')\n",
                     },
                 }),
-                '{"name":"run_command","arguments":{"command":"python -m pip --version"}}',
+                '{"name":"run_command","arguments":{"command":"python -m compileall -q ."}}',
                 "Created and verified gui/main.py.",
             ])
             agent = MultiModelAgent(
@@ -177,7 +178,8 @@ class RecoverTextToolCallTests(unittest.TestCase):
 
             target = os.path.join(workspace, "gui", "main.py")
             self.assertTrue(os.path.isfile(target))
-            self.assertEqual(result, "Created and verified gui/main.py.")
+            self.assertIn("Created and verified gui/main.py.", result)
+            self.assertIn("Verification status: PASS", result)
             self.assertIsNone(fake_client.tools_seen[1])
             self.assertIsNotNone(fake_client.tools_seen[0])
 
@@ -192,7 +194,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
                         "content": "print('hello')\n",
                     },
                 }),
-                '{"name":"run_command","arguments":{"command":"python -m pip --version"}}',
+                '{"name":"run_command","arguments":{"command":"python -m compileall -q ."}}',
                 "Created calculator_gui/main.py and verified it.",
             ])
             agent = MultiModelAgent(
@@ -213,7 +215,8 @@ class RecoverTextToolCallTests(unittest.TestCase):
             self.assertTrue(
                 os.path.isfile(os.path.join(workspace, "calculator_gui", "main.py"))
             )
-            self.assertEqual(result, "Created calculator_gui/main.py and verified it.")
+            self.assertIn("Created calculator_gui/main.py and verified it.", result)
+            self.assertIn("Verification status: PASS", result)
             self.assertEqual(len(fake_client.messages_seen), 4)
 
 
@@ -235,10 +238,10 @@ class RecoverTextToolCallTests(unittest.TestCase):
                     "name": "write_file",
                     "arguments": {
                         "path": "gui/main.py",
-                        "content": "print('created after duplicate')\\n",
+                        "content": "print('created after duplicate')\n",
                     },
                 }),
-                '{"name":"run_command","arguments":{"command":"python -m pip --version"}}',
+                '{"name":"run_command","arguments":{"command":"python -m compileall -q ."}}',
                 "Created and verified gui/main.py.",
             ])
             agent = MultiModelAgent(
@@ -255,8 +258,9 @@ class RecoverTextToolCallTests(unittest.TestCase):
             target = os.path.join(workspace, "gui", "main.py")
             self.assertTrue(os.path.isfile(target))
             with open(target, "r", encoding="utf-8") as file:
-                self.assertEqual(file.read(), "print('created after duplicate')\\n")
-            self.assertEqual(result, "Created and verified gui/main.py.")
+                self.assertEqual(file.read(), "print('created after duplicate')\n")
+            self.assertIn("Created and verified gui/main.py.", result)
+            self.assertIn("Verification status: PASS", result)
             self.assertEqual(len(fake_client.messages_seen), 5)
 
 if __name__ == "__main__":
