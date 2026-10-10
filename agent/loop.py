@@ -198,11 +198,16 @@ def _expected_artifact_paths(task):
         if normalized not in expected:
             expected.append(normalized)
 
-    # Give common underspecified app requests a concrete, testable default.
-    # This prevents a stale unrelated test suite from being mistaken for completion.
+    # Infer concrete deliverables for common requests that do not name files.
+    # Keep this list conservative: the recovery writer may only write these paths.
     lowered_task = task.lower()
-    if not file_paths and not folders and re.search(r"\bcalculator\b", lowered_task):
-        expected.extend(["calculator.py", "test_calculator.py"])
+    if not file_paths and not folders:
+        if re.search(r"\bcalculator\b", lowered_task):
+            expected.extend(["calculator.py", "test_calculator.py"])
+        elif re.search(r"\b(?:todo|to-do|task manager)\b", lowered_task):
+            expected.extend(["app.py", "test_app.py"])
+        elif re.search(r"\b(?:create|build|make|implement|banao|bana do)\b", lowered_task) and re.search(r"\b(?:app|application|system|tool)\b", lowered_task):
+            expected.extend(["app.py", "test_app.py"])
 
     # Only return relative paths; all actual operations remain workspace-scoped.
     return [path for path in expected if path and not os.path.isabs(path)]
@@ -591,15 +596,14 @@ You are Local Codex, an autonomous coding agent.
 Workspace root: {self.workspace}
 Tools available: {tools_description}
 
-Understand the user's whole request in English, Hindi, or Hinglish, not just its first sentence. Preserve every explicit
-requirement and requested deliverable. Infer sensible defaults for minor details.
-Inspect the existing project before editing. Make real changes in workspace files; do not
-just explain or print code. Work in small steps, one tool action per response.
-After implementation, run an appropriate test or syntax check, inspect the result, fix
-errors, and check again. Never claim a file or test succeeded without tool evidence.
-Do not repeat successful actions. Keep all file operations inside the workspace.
-If the task is genuinely ambiguous in a way that changes the result, ask one short question;
-otherwise proceed with a reasonable implementation.
+Understand the entire request in English, Hindi, or Hinglish. Finish the user's actual goal, not just the next tool action.
+For a coding/build request, create complete, useful, runnable implementation code, not empty files, placeholders, TODOs, or explanations.
+Inspect the existing project briefly, infer sensible defaults, and preserve its language/framework. For a simple new app with no stack, choose a practical default and implement it.
+IMPORTANT: write_file automatically creates parent folders. Prefer writing the actual source file directly; do NOT spend a step creating a folder when the file write can create it.
+Plan the minimum deliverables mentally, then write the code, add tests where practical, run the relevant test/build/program, fix failures, and rerun.
+Do not run old unrelated tests and call the new task complete. A command only verifies a task if it checks the current changed code.
+Avoid repeating actions and avoid spending steps on folder/list operations once enough context is known. Never claim success without tool evidence.
+Keep file operations inside the workspace. Ask only if an essential requirement cannot be inferred.
 """
         else:
             system_prompt = f"""
@@ -659,7 +663,10 @@ Workspace root is the current directory. Keep file operations inside it.
             for item in self.session_history
             if item.get("role") == "user"
         ][-2:]
-        task_context = "\n".join(recent_user_tasks + [task])
+        # Deliverable tracking must describe THIS task only. Including previous chat
+        # requests here caused stale files/tests to be treated as current requirements.
+        task_context = task
+        consecutive_no_progress = 0
 
         for step in range(self.max_steps):
             self.show_status(f"Thinking · step {step + 1}/{self.max_steps}")
@@ -821,6 +828,9 @@ Workspace root is the current directory. Keep file operations inside it.
             else:
                 messages.append(message)
 
+            # Track real implementation progress separately from tool-call activity.
+            # Creating folders, listing files, or running unrelated commands is not progress.
+            productive_step = False
             # Execute one-action-at-a-time tool requests and give local models readable
             # results instead of a synthetic tool-call protocol they may echo forever.
             duplicate_mutation = False
@@ -870,6 +880,12 @@ Workspace root is the current directory. Keep file operations inside it.
                     and isinstance(tool_result, dict)
                     and tool_result.get("success") is True
                 ):
+                    productive_step = True
+                if (
+                    name in {"write_file", "edit_file"}
+                    and isinstance(tool_result, dict)
+                    and tool_result.get("success") is True
+                ):
                     path = arguments.get("path", "")
                     if path:
                         if path not in self.last_task_report["changed_files"]:
@@ -895,6 +911,7 @@ Workspace root is the current directory. Keep file operations inside it.
                         and record["return_code"] == 0
                     ):
                         mutation_needs_verification = False
+                        productive_step = True
 
                 if local_json_mode and recovered:
                     readable_result = json.dumps(
@@ -932,13 +949,15 @@ Workspace root is the current directory. Keep file operations inside it.
                     ),
                 })
 
-            # Recover from a local model repeating the same tool action. We bypass
-            # the tool protocol, request a constrained file map, and accept only
-            # explicitly requested relative paths.
+            # Recover not only from identical repeated calls but also from agents
+            # that keep doing non-productive actions (folders/listing/unrelated commands).
+            # This prevents wasting the entire configured step budget.
+            consecutive_no_progress = 0 if productive_step else consecutive_no_progress + 1
+            should_recover = repeated_action_count >= 3 or consecutive_no_progress >= 4
             if (
                 local_json_mode
                 and not local_fallback_attempted
-                and repeated_action_count >= 3
+                and should_recover
             ):
                 missing = self._missing_expected_artifacts(task_context)
                 if missing:
@@ -964,9 +983,27 @@ Workspace root is the current directory. Keep file operations inside it.
                         "The task is NOT marked successful; inspect the reported checks and try a stronger model."
                     )
 
+        # The step cap is a safety net, not an excuse to leave a coding task half done.
+        # Before reporting a limit, make one constrained recovery attempt for missing files.
+        missing_at_limit = self._missing_expected_artifacts(task_context)
+        if local_json_mode and not local_fallback_attempted and missing_at_limit:
+            self.show_status("Step budget reached; recovering missing implementation files")
+            local_fallback_attempted = True
+            recovered_files = self._generate_missing_files_locally(
+                client, task_context, _expected_artifact_paths(task_context)
+            )
+            if recovered_files:
+                summary = "Recovered the missing implementation after the normal tool loop made insufficient progress."
+                self.session_history.extend([
+                    {"role": "user", "content": task},
+                    {"role": "assistant", "content": summary},
+                ])
+                self.session_history = self.session_history[-(MAX_SESSION_TURNS * 2):]
+                return self._format_final_report(summary)
+
         limit_message = (
-            f"Stopped after {self.max_steps} tool steps to avoid an infinite loop. "
-            "Some work may remain; review the tool results above and ask me to continue."
+            f"Stopped after {self.max_steps} tool steps. "
+            "The recovery attempt could not verify all requested deliverables; the task is not marked successful."
         )
         self.session_history.extend([
             {"role": "user", "content": task},
