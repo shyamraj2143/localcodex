@@ -926,7 +926,7 @@ Workspace root is the current directory. Keep file operations inside it.
             if (
                 local_json_mode
                 and not local_fallback_attempted
-                and repeated_action_count >= 2
+                and repeated_action_count >= 3
             ):
                 missing = self._missing_expected_artifacts(task_context)
                 if missing:
