@@ -314,8 +314,10 @@ class MultiModelAgent:
                 "You are recovering a stalled local coding agent. Return ONLY one valid JSON object "
                 "with this exact shape: {\"files\": {\"relative/path.ext\": \"complete file content\", ...}}. "
                 "No Markdown fences, no commentary, and no tool-call JSON.\n"
-                "Complete the user's entire task in the listed files. Include complete source code and "
-                "tests when requested. Do not return folder names as files.\n"
+                "Complete the user's entire task in the listed files. Write substantial, runnable implementation code, "
+                "not placeholders, empty functions, TODOs, or comments instead of code. Use sensible defaults and include "
+                "the most useful practical features implied by the task. Add meaningful tests for core behavior. "
+                "Every required path must have complete content. Do not return folder names as files.\n"
                 f"Workspace root: {self.workspace}\n"
                 f"Required file paths (use these exact keys): {json.dumps(file_paths, ensure_ascii=False)}\n"
                 f"Original task:\n{task_context}\n"
@@ -344,12 +346,16 @@ class MultiModelAgent:
 
                 allowed = {os.path.normcase(os.path.normpath(path)): path for path in file_paths}
                 wrote_any = False
+                written_paths = set()
                 for path, file_content in generated.items():
                     if not isinstance(path, str) or not isinstance(file_content, str):
                         continue
                     normalized = os.path.normcase(os.path.normpath(path.replace("\\", os.sep)))
                     canonical = allowed.get(normalized)
                     if not canonical:
+                        continue
+                    if not file_content.strip():
+                        last_error = f"Model returned empty source for {canonical}."
                         continue
                     result = self.execute_tool("write_file", {
                         "path": canonical,
@@ -359,16 +365,31 @@ class MultiModelAgent:
                         last_error = f"Could not write {canonical}: {result}"
                         continue
                     wrote_any = True
+                    written_paths.add(canonical)
                     if canonical not in self.last_task_report["changed_files"]:
                         self.last_task_report["changed_files"].append(canonical)
-                    check = verify_changed_file(self.workspace, canonical)
-                    self.last_task_report["static_checks"].append(check)
+
+                not_generated = sorted(set(file_paths) - written_paths)
+                if not_generated:
+                    last_error = "Model omitted required implementation files: " + ", ".join(not_generated)
+                    continue
+
+                # Re-read and validate every file from this recovery attempt. Existence
+                # alone is not enough: a zero-byte source file must never count as done.
+                checks = [verify_changed_file(self.workspace, path) for path in file_paths]
+                self.last_task_report["static_checks"].extend(checks)
+                failed_checks = [check for check in checks if not check.get("success")]
+                if failed_checks:
+                    last_error = "File validation failed: " + "; ".join(
+                        f"{item.get('path')}: {', '.join(item.get('errors', []))}"
+                        for item in failed_checks
+                    )
+                    continue
 
                 missing = self._missing_expected_artifacts(task_context)
                 if missing:
                     last_error = "Still missing requested artifacts: " + ", ".join(missing)
-                    if not wrote_any:
-                        continue
+                    continue
 
                 python_files = [path for path in file_paths if path.lower().endswith((".py", ".pyw"))]
                 test_files = [path for path in python_files if os.path.basename(path).lower().startswith("test_")]
@@ -394,14 +415,21 @@ class MultiModelAgent:
                         "meaningful_check": _is_meaningful_verification_command(command),
                     }
                     self.last_task_report["commands"].append(record)
-                    if record["success"] and record["return_code"] == 0:
-                        return not self._missing_expected_artifacts(task_context)
-                    last_error = (
-                        f"Command failed (return code {record['return_code']}): {command}\n"
-                        + str(result.get("stdout", "") if isinstance(result, dict) else result)
+                    output = (
+                        str(result.get("stdout", "") if isinstance(result, dict) else result)
                         + "\n"
                         + str(result.get("stderr", "") if isinstance(result, dict) else "")
                     )
+                    tests_ran = not test_files or bool(
+                        re.search(r"Ran\s+[1-9]\d*\s+tests?\b", output, re.IGNORECASE)
+                    )
+                    if record["success"] and record["return_code"] == 0 and record["meaningful_check"] and tests_ran:
+                        return not self._missing_expected_artifacts(task_context)
+                    if test_files and not tests_ran:
+                        last_error = "Test command returned zero but did not report running any tests. Check discovery/import paths."
+                    else:
+                        last_error = f"Command failed (return code {record['return_code']}): {command}"
+                    last_error += "\n" + output
                     continue
 
                 return not self._missing_expected_artifacts(task_context)
