@@ -103,15 +103,15 @@ class RecoverTextToolCallTests(unittest.TestCase):
         generated = json.dumps({
             "files": {
                 "codex_smoke_test/main.py": (
-                    "def add(a, b):\\n    return a + b\\n\\n"
-                    "def subtract(a, b):\\n    return a - b\\n"
+                    "def add(a, b):\n    return a + b\n\n"
+                    "def subtract(a, b):\n    return a - b\n"
                 ),
                 "codex_smoke_test/test_main.py": (
-                    "import unittest\\nfrom main import add, subtract\\n\\n"
-                    "class TestArithmetic(unittest.TestCase):\\n"
-                    "    def test_add(self):\\n        self.assertEqual(add(2, 3), 5)\\n\\n"
-                    "    def test_subtract(self):\\n        self.assertEqual(subtract(5, 3), 2)\\n\\n"
-                    "if __name__ == '__main__':\\n    unittest.main()\\n"
+                    "import unittest\nfrom main import add, subtract\n\n"
+                    "class TestArithmetic(unittest.TestCase):\n"
+                    "    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n\n"
+                    "    def test_subtract(self):\n        self.assertEqual(subtract(5, 3), 2)\n\n"
+                    "if __name__ == '__main__':\n    unittest.main()\n"
                 ),
             }
         })
