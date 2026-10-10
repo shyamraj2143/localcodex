@@ -6,7 +6,7 @@ A terminal-based AI coding assistant that can inspect, create, edit, and debug f
 
 - Python 3.10+
 - Git (optional, for version control)
-- For recommended NVIDIA mode: an NVIDIA API key from NVIDIA API Catalog
+- For optional NVIDIA mode: an NVIDIA API key from NVIDIA API Catalog
 - For Groq mode: a Groq API key (optional fallback)
 - For local mode: Ollama installed and a model pulled locally
 
@@ -32,7 +32,7 @@ A terminal-based AI coding assistant that can inspect, create, edit, and debug f
    py -m pip install -r requirements.txt
    ```
 
-4. Configure NVIDIA API (recommended default):
+4. Configure NVIDIA API (optional, for online mode):
 
    ```powershell
    Copy-Item .env.example .env
@@ -54,7 +54,7 @@ A terminal-based AI coding assistant that can inspect, create, edit, and debug f
    ollama pull qwen2.5-coder:3b
    ```
 
-   The checked-in config defaults the local model to `qwen2.5-coder:3b`. Option **[3] Qwen Coder** respects this value instead of silently forcing 1.5B; option **[4]** selects DeepSeek-Coder 1.3B. The provider default remains NVIDIA, so choose **[3]** at startup to run this local model.
+   The checked-in config defaults the local model to `qwen2.5-coder:3b`. Option **[3] Qwen Coder** respects this value instead of silently forcing 1.5B; option **[4]** selects DeepSeek-Coder 1.3B. The checked-in provider default is now **Ollama**, so press Enter to use Qwen Coder 3B locally. Choose **[1]** for NVIDIA or **[2]** for Groq.
 
    Local mode uses plain JSON actions, readable tool feedback, duplicate-action protection, missing-deliverable checks, and retries when the model tries to finish too early. After every successful source-file write/edit, Local Codex reads the file back and performs supported static checks (Python syntax, JSON syntax, and JavaScript syntax when Node.js is installed). It also records executed commands and only counts recognized test/build/lint/syntax commands as validation; a command such as `python -m pip --version` is not considered a code test. The final response includes changed files, automatic checks, commands and return codes, and an honest verification status. Static syntax checks do not replace relevant tests or real end-to-end testing, and a small model can still have capability limits.
 
