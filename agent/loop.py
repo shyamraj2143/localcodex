@@ -9,6 +9,7 @@ of an interactive coding agent.
 import json
 import os
 import re
+import sys
 import uuid
 from types import SimpleNamespace
 
@@ -260,6 +261,137 @@ class MultiModelAgent:
         else:
             lines.append("Verification status: no file modifications were recorded; review the task summary above.")
         return "\n".join(line for line in lines if line is not None)
+
+    def _missing_expected_artifacts(self, task_context):
+        """Return explicitly requested relative paths that do not exist yet."""
+        missing = []
+        root = os.path.realpath(self.workspace)
+        for artifact in _expected_artifact_paths(task_context):
+            full_path = os.path.realpath(os.path.join(root, artifact))
+            try:
+                if os.path.commonpath([root, full_path]) != root:
+                    continue
+            except ValueError:
+                continue
+            if not os.path.exists(full_path):
+                missing.append(artifact)
+        return missing
+
+    def _generate_missing_files_locally(self, client, task_context, expected_paths):
+        """Escape a stuck tool loop by asking the local model for file contents without tools."""
+        file_paths = [
+            path for path in expected_paths
+            if os.path.splitext(path)[1].lower() in {
+                ".py", ".pyw", ".js", ".jsx", ".ts", ".tsx", ".html", ".css",
+                ".json", ".md", ".txt", ".java", ".cpp", ".c", ".cs", ".go",
+                ".rs", ".php", ".sql", ".yml", ".yaml", ".toml", ".sh",
+            }
+        ]
+        if not file_paths:
+            return False
+
+        last_error = ""
+        for attempt in range(2):
+            self.show_status("Local model stalled; generating required files directly")
+            prompt = (
+                "You are recovering a stalled local coding agent. Return ONLY one valid JSON object "
+                "with this exact shape: {\"files\": {\"relative/path.ext\": \"complete file content\", ...}}. "
+                "No Markdown fences, no commentary, and no tool-call JSON.\n"
+                "Complete the user's entire task in the listed files. Include complete source code and "
+                "tests when requested. Do not return folder names as files.\n"
+                f"Workspace root: {self.workspace}\n"
+                f"Required file paths (use these exact keys): {json.dumps(file_paths, ensure_ascii=False)}\n"
+                f"Original task:\n{task_context}\n"
+                + (f"Previous verification failure to fix:\n{last_error}\n" if last_error else "")
+            )
+            try:
+                response = client.chat(
+                    [
+                        {
+                            "role": "system",
+                            "content": (
+                                "Generate complete source files as a JSON files map. "
+                                "The response is consumed by a program, so valid JSON only."
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    tools=None,
+                )
+                content = getattr(response.choices[0].message, "content", "") or ""
+                payload = _extract_json_object(content)
+                generated = payload.get("files") if isinstance(payload, dict) else None
+                if not isinstance(generated, dict):
+                    last_error = "Model did not return a JSON object with a files map."
+                    continue
+
+                allowed = {os.path.normcase(os.path.normpath(path)): path for path in file_paths}
+                wrote_any = False
+                for path, file_content in generated.items():
+                    if not isinstance(path, str) or not isinstance(file_content, str):
+                        continue
+                    normalized = os.path.normcase(os.path.normpath(path.replace("\\", os.sep)))
+                    canonical = allowed.get(normalized)
+                    if not canonical:
+                        continue
+                    result = self.execute_tool("write_file", {
+                        "path": canonical,
+                        "content": file_content,
+                    })
+                    if not isinstance(result, dict) or result.get("success") is not True:
+                        last_error = f"Could not write {canonical}: {result}"
+                        continue
+                    wrote_any = True
+                    if canonical not in self.last_task_report["changed_files"]:
+                        self.last_task_report["changed_files"].append(canonical)
+                    check = verify_changed_file(self.workspace, canonical)
+                    self.last_task_report["static_checks"].append(check)
+
+                missing = self._missing_expected_artifacts(task_context)
+                if missing:
+                    last_error = "Still missing requested artifacts: " + ", ".join(missing)
+                    if not wrote_any:
+                        continue
+
+                python_files = [path for path in file_paths if path.lower().endswith((".py", ".pyw"))]
+                test_files = [path for path in python_files if os.path.basename(path).lower().startswith("test_")]
+                if test_files:
+                    test_dir = os.path.dirname(test_files[0]).replace("\\", "/") or "."
+                    command = f'"{sys.executable}" -m unittest discover -s "{test_dir}" -v'
+                elif python_files:
+                    targets = " ".join(f'"{path}"' for path in python_files)
+                    command = f'"{sys.executable}" -m py_compile {targets}'
+                elif any(path.lower().endswith((".js", ".mjs", ".cjs")) for path in file_paths):
+                    command = "node --check " + " ".join(
+                        f'"{path}"' for path in file_paths if path.lower().endswith((".js", ".mjs", ".cjs"))
+                    )
+                else:
+                    command = ""
+
+                if command:
+                    result = self.execute_tool("run_command", {"command": command})
+                    record = {
+                        "command": command,
+                        "return_code": result.get("return_code") if isinstance(result, dict) else None,
+                        "success": isinstance(result, dict) and result.get("success") is True,
+                        "meaningful_check": _is_meaningful_verification_command(command),
+                    }
+                    self.last_task_report["commands"].append(record)
+                    if record["success"] and record["return_code"] == 0:
+                        return not self._missing_expected_artifacts(task_context)
+                    last_error = (
+                        f"Command failed (return code {record['return_code']}): {command}\n"
+                        + str(result.get("stdout", "") if isinstance(result, dict) else result)
+                        + "\n"
+                        + str(result.get("stderr", "") if isinstance(result, dict) else "")
+                    )
+                    continue
+
+                return not self._missing_expected_artifacts(task_context)
+            except Exception as error:
+                last_error = f"{type(error).__name__}: {error}"
+
+        return False
 
     def show_status(self, message):
         if self.status_callback:
