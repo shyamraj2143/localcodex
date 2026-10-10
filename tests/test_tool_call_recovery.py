@@ -97,20 +97,20 @@ class RecoverTextToolCallTests(unittest.TestCase):
         generated = json.dumps({
             "files": {
                 "calculator.py": (
-                    "def add(a, b):\\n    return a + b\\n\\n"
-                    "def subtract(a, b):\\n    return a - b\\n\\n"
-                    "def multiply(a, b):\\n    return a * b\\n\\n"
-                    "def divide(a, b):\\n    if b == 0: raise ZeroDivisionError('division by zero')\\n    return a / b\\n"
+                    "def add(a, b):\n    return a + b\n\n"
+                    "def subtract(a, b):\n    return a - b\n\n"
+                    "def multiply(a, b):\n    return a * b\n\n"
+                    "def divide(a, b):\n    if b == 0: raise ZeroDivisionError('division by zero')\n    return a / b\n"
                 ),
                 "test_calculator.py": (
-                    "import unittest\\nfrom calculator import add, subtract, multiply, divide\\n\\n"
-                    "class CalculatorTests(unittest.TestCase):\\n"
-                    "    def test_add(self): self.assertEqual(add(2, 3), 5)\\n"
-                    "    def test_subtract(self): self.assertEqual(subtract(5, 3), 2)\\n"
-                    "    def test_multiply(self): self.assertEqual(multiply(2, 3), 6)\\n"
-                    "    def test_divide_by_zero(self):\\n"
-                    "        with self.assertRaises(ZeroDivisionError): divide(2, 0)\\n\\n"
-                    "if __name__ == '__main__': unittest.main()\\n"
+                    "import unittest\nfrom calculator import add, subtract, multiply, divide\n\n"
+                    "class CalculatorTests(unittest.TestCase):\n"
+                    "    def test_add(self): self.assertEqual(add(2, 3), 5)\n"
+                    "    def test_subtract(self): self.assertEqual(subtract(5, 3), 2)\n"
+                    "    def test_multiply(self): self.assertEqual(multiply(2, 3), 6)\n"
+                    "    def test_divide_by_zero(self):\n"
+                    "        with self.assertRaises(ZeroDivisionError): divide(2, 0)\n\n"
+                    "if __name__ == '__main__': unittest.main()\n"
                 ),
             }
         })
@@ -134,11 +134,11 @@ class RecoverTextToolCallTests(unittest.TestCase):
     def test_distinct_nonproductive_folder_actions_trigger_recovery_before_step_limit(self):
         generated = json.dumps({
             "files": {
-                "calculator.py": "def add(a, b):\\n    return a + b\\n",
+                "calculator.py": "def add(a, b):\n    return a + b\n",
                 "test_calculator.py": (
-                    "import unittest\\nfrom calculator import add\\n"
-                    "class TestCalculator(unittest.TestCase):\\n"
-                    "    def test_add(self): self.assertEqual(add(2, 3), 5)\\n"
+                    "import unittest\nfrom calculator import add\n"
+                    "class TestCalculator(unittest.TestCase):\n"
+                    "    def test_add(self): self.assertEqual(add(2, 3), 5)\n"
                 ),
             }
         })
