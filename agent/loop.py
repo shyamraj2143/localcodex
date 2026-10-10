@@ -777,9 +777,12 @@ Workspace root is the current directory. Keep file operations inside it.
                 echoed_tool_result = _is_tool_result_json(final_text)
                 no_local_work = local_json_mode and executed_tool_calls == 0
                 unverified_changes = local_json_mode and mutation_needs_verification
+                # A local model gets one chance to continue naturally. If it still
+                # claims completion with missing files, switch to constrained recovery.
+                completion_retry_limit = 1 if local_json_mode else 4
                 if (
                     (echoed_tool_result or missing_artifacts or no_local_work or unverified_changes)
-                    and completion_retries < 4
+                    and completion_retries < completion_retry_limit
                 ):
                     completion_retries += 1
                     messages.append({"role": "assistant", "content": final_text})
@@ -834,6 +837,27 @@ Workspace root is the current directory. Keep file operations inside it.
                         + "; ".join(details)
                         + ". The model may be too small for this task. "
                         "Try Groq or a stronger local coding model, then ask it to continue."
+                    )
+
+                if local_json_mode and missing_artifacts and not local_fallback_attempted:
+                    local_fallback_attempted = True
+                    self.show_status("Model stopped before implementation; generating missing files")
+                    recovered_files = self._generate_missing_files_locally(
+                        client, task_context, _expected_artifact_paths(task_context)
+                    )
+                    if recovered_files:
+                        summary = "Generated missing implementation files after the model stopped prematurely, then ran verification."
+                        self.session_history.extend([
+                            {"role": "user", "content": task},
+                            {"role": "assistant", "content": summary},
+                        ])
+                        self.session_history = self.session_history[-(MAX_SESSION_TURNS * 2):]
+                        return self._format_final_report(summary)
+                    final_text = (
+                        "The model stopped before completing the requested files. "
+                        "Automatic file-generation recovery was attempted but did not pass verification. "
+                        "The task is NOT marked successful. "
+                        + final_text
                     )
 
                 self.session_history.extend([
