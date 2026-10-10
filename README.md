@@ -54,7 +54,15 @@ A terminal-based AI coding assistant that can inspect, create, edit, and debug f
    ollama pull qwen2.5-coder:3b
    ```
 
-   Then edit `config/config.json` and set `"local_model": "qwen2.5-coder:3b"`. Option **[3] Qwen Coder** now respects this configured model instead of silently forcing 1.5B. Option **[4]** selects DeepSeek-Coder 1.3B. NVIDIA/Groq can be stronger for complex tasks, but Local Codex's local mode now uses a compact prompt, plain JSON actions, readable tool feedback, duplicate-action protection, missing-deliverable checks, and verification retries. A small model can still have capability limits.
+   The checked-in config defaults the local model to `qwen2.5-coder:3b`. Option **[3] Qwen Coder** respects this value instead of silently forcing 1.5B; option **[4]** selects DeepSeek-Coder 1.3B. The provider default remains NVIDIA, so choose **[3]** at startup to run this local model.
+
+   Local mode uses plain JSON actions, readable tool feedback, duplicate-action protection, missing-deliverable checks, and retries when the model tries to finish too early. After every successful source-file write/edit, Local Codex reads the file back and performs supported static checks (Python syntax, JSON syntax, and JavaScript syntax when Node.js is installed). It also records executed commands and only counts recognized test/build/lint/syntax commands as validation; a command such as `python -m pip --version` is not considered a code test. The final response includes changed files, automatic checks, commands and return codes, and an honest verification status. Static syntax checks do not replace relevant tests or real end-to-end testing, and a small model can still have capability limits.
+
+   Run the project tests after updating:
+
+   ```powershell
+   py -m unittest discover -s tests -v
+   ```
 
 6. Start Local Codex from the directory you want it to work in:
 
