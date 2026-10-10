@@ -119,6 +119,7 @@ class RecoverTextToolCallTests(unittest.TestCase):
             fake_client = FakeClient([
                 '{"name":"create_folder","arguments":{"path":"codex_smoke_test"}}',
                 '{"name":"create_folder","arguments":{"path":"codex_smoke_test"}}',
+                '{"name":"create_folder","arguments":{"path":"codex_smoke_test"}}',
                 generated,
             ])
             agent = MultiModelAgent(
@@ -138,8 +139,8 @@ class RecoverTextToolCallTests(unittest.TestCase):
             test_path = os.path.join(workspace, "codex_smoke_test", "test_main.py")
             self.assertTrue(os.path.isfile(main_path))
             self.assertTrue(os.path.isfile(test_path))
-            self.assertEqual(len(fake_client.messages_seen), 3)
-            self.assertIsNone(fake_client.tools_seen[2])
+            self.assertEqual(len(fake_client.messages_seen), 4)
+            self.assertIsNone(fake_client.tools_seen[3])
             self.assertIn("Verification status: PASS", result)
             self.assertIn("unittest discover", result)
             self.assertIn("codex_smoke_test/main.py", result)
