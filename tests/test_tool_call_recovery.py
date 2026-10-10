@@ -69,6 +69,30 @@ class RecoverTextToolCallTests(unittest.TestCase):
             ["calculator.py", "test_calculator.py"],
         )
 
+    def test_final_report_cannot_pass_when_requested_calculator_files_are_missing(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            agent = MultiModelAgent(
+                config={"provider": "ollama", "local_model": "test-model"},
+                tools={},
+                tool_schemas=[],
+                workspace=workspace,
+            )
+            agent.last_task_report = {
+                "task": "create a calculator system",
+                "changed_files": ["codex_smoke_test/main.py"],
+                "commands": [{
+                    "command": "python -m unittest discover -s codex_smoke_test",
+                    "return_code": 0,
+                    "success": True,
+                    "meaningful_check": True,
+                }],
+                "static_checks": [{"path": "codex_smoke_test/main.py", "success": True, "checks": ["syntax valid"], "errors": []}],
+            }
+            report = agent._format_final_report("Task completed.")
+            self.assertIn("Verification status: PARTIAL", report)
+            self.assertIn("calculator.py", report)
+            self.assertNotIn("Verification status: PASS", report)
+
     def test_expected_artifacts_include_file_inside_named_folder(self):
         paths = _expected_artifact_paths(
             "Create a folder named calculator_gui. Inside it, create main.py containing code."
