@@ -198,6 +198,12 @@ def _expected_artifact_paths(task):
         if normalized not in expected:
             expected.append(normalized)
 
+    # Give common underspecified app requests a concrete, testable default.
+    # This prevents a stale unrelated test suite from being mistaken for completion.
+    lowered_task = task.lower()
+    if not file_paths and not folders and re.search(r"\\bcalculator\\b", lowered_task):
+        expected.extend(["calculator.py", "test_calculator.py"])
+
     # Only return relative paths; all actual operations remain workspace-scoped.
     return [path for path in expected if path and not os.path.isabs(path)]
 
