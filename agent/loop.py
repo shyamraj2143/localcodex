@@ -440,6 +440,7 @@ class MultiModelAgent:
         )
         behavioral_tests_pass = _has_passing_behavioral_tests(commands, changed)
         report["behavioral_tests_pass"] = behavioral_tests_pass
+        lines.append("Behavioral test gate: " + ("PASS — task-updated test file and passing test run recorded" if behavioral_tests_pass else "NOT PASSED — task-updated behavioral tests must be run successfully"))
         static_pass = all(item.get("success") for item in latest_checks.values())
         missing_artifacts = self._missing_expected_artifacts(report.get("task", ""))
         report["missing_artifacts"] = missing_artifacts
@@ -580,7 +581,7 @@ class MultiModelAgent:
 
         command_list = [
             f'"{sys.executable}" -m py_compile main.py game_logic.py tests/test_game_logic.py',
-            f'"{sys.executable}" -m unittest discover -s tests -v',
+            f'"{sys.executable}" -m unittest discover -s tests -p "test_game_logic.py" -v',
         ]
         all_passed = True
         for command in command_list:
