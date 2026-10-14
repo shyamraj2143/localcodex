@@ -43,27 +43,10 @@ class UI:
 
     @classmethod
     def header(cls, workspace, provider, model, tool_count, execution_mode="OFFLINE", worker_count=0):
-        width = max(42, min(shutil.get_terminal_size((80, 24)).columns - 2, 96))
-
-        print()
-        print(cls.color("╭" + "─" * width + "╮", cls.CYAN))
-        print(
-            cls.color("│", cls.CYAN)
-            + cls.color(
-                "  LOCAL CODEX",
-                cls.BOLD + cls.CYAN,
-            )
-            + " " * (width - 15)
-            + cls.color("│", cls.CYAN)
-        )
-        print(cls.color("├" + "─" * width + "┤", cls.CYAN))
-        print(f"  Provider : {provider.upper()}")
-        print(f"  Model    : {model}")
-        print(f"  Execution: {execution_mode.upper()} | Active workers: {worker_count}")
-        print(f"  Tools    : {tool_count} available")
-        print(f"  Workspace: {workspace}")
-        print(cls.color("╰" + "─" * width + "╯", cls.CYAN))
-        print()
+        project = os.path.basename(os.path.normpath(workspace)) or workspace
+        print(cls.color("LOCAL CODEX", cls.BOLD + cls.CYAN)
+              + f"  {provider.upper()} / {model}  [{execution_mode.upper()}]")
+        print(f"Workspace: {project} ({workspace})\n")
 
     @classmethod
     def success(cls, message):
@@ -97,8 +80,15 @@ def load_config():
     else:
         config["max_tokens"] = min(token_limit, 16384)
 
-    config["max_parallel_tool_workers"] = max(1, min(int(config.get("max_parallel_tool_workers", config.get("max_parallel_workers", 2))), 4))
-    config["max_concurrent_llm_requests"] = max(1, min(int(config.get("max_concurrent_llm_requests", 1)), 2))
+    config["max_total_workers"] = max(2, min(int(config.get("max_total_workers", 3)), 8))
+    config["max_parallel_tool_workers"] = max(1, min(
+        int(config.get("max_parallel_tool_workers", config.get("max_parallel_workers", 2))),
+        4, config["max_total_workers"] - 1,
+    ))
+    config["max_concurrent_llm_requests"] = max(1, min(
+        int(config.get("max_concurrent_llm_requests", 1)), 2,
+        config["max_total_workers"] - config["max_parallel_tool_workers"],
+    ))
     config["max_agent_steps"] = max(1, min(int(config.get("max_agent_steps", 32)), 80))
 
     return config
@@ -261,7 +251,7 @@ def main():
     else:
         model = config.get("models", {}).get("coder", "Not configured")
 
-    workspace = os.getcwd()
+    workspace = os.path.realpath(os.environ.get("LOCAL_CODEX_WORKSPACE") or os.getcwd())
     config["selected_model"] = model
 
     try:

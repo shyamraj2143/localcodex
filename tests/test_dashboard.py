@@ -68,8 +68,8 @@ def test_rich_dashboard_starts_and_finishes_without_a_tty():
     dashboard.bus.emit("model.request", provider="mock", model="test")
     dashboard.bus.emit("model.response", duration=0.01, success=True)
     dashboard.bus.emit("task.finished", status="PASS")
-    assert "smoke" in output.getvalue()
-    assert "Finished" in output.getvalue()
+    assert "LOCAL CODEX" in output.getvalue()
+    assert "Completed and verified" in output.getvalue()
 
 
 def test_dashboard_does_not_display_internal_step_counters():
@@ -150,11 +150,11 @@ def test_dashboard_labels_unrun_checks_and_failed_reads_honestly():
     rendered = output.getvalue()
     assert "The file could not be read" in rendered
     assert "file not found" in rendered
-    assert "Not verified" in rendered
-    assert "Not run or not reported" in rendered
+    assert "Failed" in rendered
+    assert "Tests: not run" in rendered
 
 
-def test_rich_demo_dashboard_renders_workflow_and_hides_technical_details_by_default():
+def test_rich_demo_dashboard_is_compact_and_hides_technical_details_by_default():
     pytest.importorskip("rich")
     from rich.console import Console
 
@@ -168,12 +168,68 @@ def test_rich_demo_dashboard_renders_workflow_and_hides_technical_details_by_def
     Console(file=rendered, width=100).print(dashboard._render())
 
     text = rendered.getvalue()
-    assert "Current task" in text
-    assert "Workflow" in text
-    assert "Inspect workspace" in text
+    assert "Build" in text
+    assert "Current task" not in text
+    assert "Live activity timeline" not in text
+    assert "Project folder" in text
     assert "Looking through the project files" in text
     assert "list_files" not in text
     assert "Workspace memory" not in text
+
+
+def test_dashboard_status_and_checklist_come_from_real_events():
+    output = io.StringIO()
+    dashboard = TerminalDashboard(mode="plain", workspace="workspace", stream=output)
+    dashboard.bus.emit("task.started", task="create app")
+    dashboard.bus.emit("tool.started", tool="write_file", arguments={"path": "src/main.py"})
+    dashboard.bus.emit("file.activity", action="created", path="src/main.py", lines=4, added=4, removed=0)
+    dashboard.bus.emit("tool.finished", tool="run_command", command="python -m pytest",
+                       duration=0.1, success=True, return_code=0)
+    dashboard.bus.emit("task.report", report={"verification_status": "PASS", "commands": [
+        {"command": "python -m pytest", "success": True, "return_code": 0}
+    ]})
+    dashboard.bus.emit("task.finished", status="PASS")
+    assert dashboard._result_label() == "Completed and verified"
+    checklist = dict(dashboard._checklist())
+    assert checklist["Files changed: 1"] == "done"
+    assert checklist["Testing: passed"] == "done"
+    assert "Completed and verified" in output.getvalue()
+
+
+def test_dashboard_never_reports_future_work_as_done():
+    dashboard = TerminalDashboard(mode="plain", workspace="workspace", stream=io.StringIO())
+    dashboard.bus.emit("task.started", task="create app")
+    assert all(state != "done" for _label, state in dashboard._checklist())
+
+
+def test_dashboard_redacts_secrets_from_debug_and_error_messages():
+    output = io.StringIO()
+    dashboard = TerminalDashboard(mode="plain", workspace="workspace", show_technical=True, stream=output)
+    dashboard.bus.emit("task.started", task="provider recovery")
+    dashboard.bus.emit("model.response", success=False, error="api_key=sk-1234567890abcdef")
+    dashboard.bus.emit("task.finished", status="FAIL")
+    rendered = output.getvalue()
+    assert "sk-1234567890abcdef" not in rendered
+    assert "[REDACTED" in rendered
+
+
+def test_plain_live_status_flushes_before_model_wait():
+    class FlushBuffer(io.StringIO):
+        def __init__(self):
+            super().__init__()
+            self.flush_count = 0
+
+        def flush(self):
+            self.flush_count += 1
+            super().flush()
+
+    output = FlushBuffer()
+    dashboard = TerminalDashboard(mode="plain", workspace="workspace", stream=output)
+    dashboard.bus.emit("task.started", task="create a file")
+    before = output.flush_count
+    dashboard.bus.emit("model.request", provider="ollama", phase="coding")
+    assert output.flush_count > before
+    assert "choosing its next coding action" in output.getvalue()
 
 
 def test_hinglish_presentation_and_optional_technical_log():
@@ -186,7 +242,7 @@ def test_hinglish_presentation_and_optional_technical_log():
     dashboard.bus.emit("task.finished", status="NOT VERIFIED")
 
     assert "Project ki files inspect kar raha hai" in output.getvalue()
-    assert "tool.started" in output.getvalue()
+    assert "Tool finished:" in output.getvalue()
     assert dashboard.verification_status == "Not verified"
 
 

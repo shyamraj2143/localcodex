@@ -30,3 +30,27 @@ def test_blocked_command_has_a_structured_outcome(tmp_path):
     assert result["blocked"] is True
     assert result["command"] == "shutdown /s"
     assert result["cwd"] == str(tmp_path.resolve())
+
+
+def test_interactive_command_receives_eof_instead_of_waiting_for_terminal_input(tmp_path):
+    result = run_command(
+        str(tmp_path),
+        _python_command("input('Enter char to delete up to: ')"),
+        timeout=2,
+    )
+    assert result["success"] is False
+    assert result["timed_out"] is False
+    assert result["duration_seconds"] < 2
+    assert "EOFError" in result["stderr"]
+
+
+def test_timed_out_command_is_terminated(tmp_path):
+    result = run_command(
+        str(tmp_path),
+        _python_command("import time; time.sleep(10)"),
+        timeout=0.2,
+    )
+    assert result["success"] is False
+    assert result["timed_out"] is True
+    assert "terminated" in result["error"]
+    assert result["duration_seconds"] < 5

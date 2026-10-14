@@ -289,14 +289,23 @@ class MultiModelAgent:
         self.status_callback = status
         self.event_bus = event_bus
         self.models = config.get("models", {})
-        self.max_workers = max(1, min(int(config.get("max_parallel_tool_workers", config.get("max_parallel_workers", 2))), 4))
-        self.max_concurrent_llm_requests = max(1, min(int(config.get("max_concurrent_llm_requests", 1)), 2))
+        self.max_total_workers = max(2, min(int(config.get("max_total_workers", 3)), 8))
+        self.max_workers = max(1, min(
+            int(config.get("max_parallel_tool_workers", config.get("max_parallel_workers", 2))),
+            4, self.max_total_workers - 1,
+        ))
+        self.max_concurrent_llm_requests = max(1, min(
+            int(config.get("max_concurrent_llm_requests", 1)), 2,
+            self.max_total_workers - self.max_workers,
+        ))
         self._llm_semaphore = threading.BoundedSemaphore(self.max_concurrent_llm_requests)
         self.max_steps = max(1, min(int(config.get("max_agent_steps", 32)), 80))
         self.session_history = []
         self.last_task_report = {}
         self._terminal_file_state = None
-        self.workspace_context = WorkspaceContextManager(workspace)
+        self.workspace_context = WorkspaceContextManager(
+            workspace, max_context_chars=int(config.get("workspace_context_chars", 6500))
+        )
         memory_config = dict(config)
         memory_config.setdefault("persistent_memory_enabled", False)
         self.workspace_memory = WorkspaceMemory(workspace, self.workspace_context, memory_config)
@@ -304,6 +313,9 @@ class MultiModelAgent:
         self.task_tool_events = []
         self.current_plan = []
         self.current_task_id = None
+        self._context_dirty = True
+        self.task_deadline_seconds = max(30, min(int(config.get("task_deadline_seconds", 300)), 1800))
+        self._active_task_deadline = None
 
     def _record_tool_outcome(self, name, arguments, result):
         safe_arguments = {
@@ -345,8 +357,10 @@ class MultiModelAgent:
         self.task_tool_events = self.task_tool_events[-200:]
         if name in {"write_file", "edit_file"}:
             self.workspace_context.invalidate([str(arguments.get("path", ""))])
+            self._context_dirty = True
         elif name in {"create_folder", "run_command"}:
             self.workspace_context.invalidate()
+            self._context_dirty = True
         return result
 
     def _format_final_report(self, summary):
@@ -414,7 +428,9 @@ class MultiModelAgent:
         report["missing_artifacts"] = missing_artifacts
         spec_issues = self._task_completeness_issues() if report.get("specification") else []
         report["completeness_issues"] = spec_issues
-        if changed and latest_meaningful_pass and static_pass and not missing_artifacts and not spec_issues:
+        if report.get("deadline_reached") and not changed:
+            lines.append("Verification status: BLOCKED — the task deadline expired before files were changed.")
+        elif changed and latest_meaningful_pass and static_pass and not missing_artifacts and not spec_issues:
             lines.append("Verification status: PASS — automatic file checks and the latest relevant test/check command passed.")
         elif changed:
             reasons = []
@@ -430,7 +446,9 @@ class MultiModelAgent:
                 lines.append("Verification status: FAIL — requested deliverables are missing: " + ", ".join(missing_artifacts) + ".")
             else:
                 lines.append("Verification status: no file modifications were recorded; review the task summary above.")
-        if changed and latest_meaningful_pass and static_pass and not missing_artifacts and not spec_issues:
+        if report.get("deadline_reached") and not changed:
+            report["verification_status"] = "BLOCKED"
+        elif changed and latest_meaningful_pass and static_pass and not missing_artifacts and not spec_issues:
             report["verification_status"] = "PASS"
         elif changed:
             report["verification_status"] = "PARTIAL"
@@ -488,6 +506,14 @@ class MultiModelAgent:
                 missing.append(artifact)
         return missing
 
+    def _task_expected_paths(self, task_context):
+        """Use the current validated contract when present; only guess paths without one."""
+        specification = (self.last_task_report or {}).get("specification")
+        if isinstance(specification, dict):
+            return [item["path"] for item in specification.get("expected_files", [])
+                    if isinstance(item, dict) and item.get("path")]
+        return list(_expected_artifact_paths(task_context))
+
     def _task_completeness_issues(self):
         specification = (self.last_task_report or {}).get("specification")
         if not specification:
@@ -503,13 +529,12 @@ class MultiModelAgent:
         """Build and verify a narrowly supported Tkinter car game through real tools."""
         if not supports_car_game_recovery(task):
             return None
-        required = {"main.py", "readme.md", "requirements.txt", "test_game_logic.py"}
         specified = {
             os.path.basename(item.get("path", "")).lower()
             for item in (specification or {}).get("expected_files", [])
             if isinstance(item, dict)
         }
-        if not required.issubset(specified):
+        if "main.py" not in specified:
             return None
         if "write_file" not in self.tools or "run_command" not in self.tools:
             return None
@@ -963,7 +988,7 @@ class MultiModelAgent:
             refresh=False,
         )
         memory_text = self.workspace_memory.context_for(
-            task, max_chars=int(self.config.get("workspace_memory_context_chars", 4200)), refresh=False
+            task, max_chars=int(self.config.get("workspace_memory_context_chars", 1200)), refresh=False
         )
         if self.last_task_report and self.last_task_report.get("task_id") == self.current_task_id:
             self.last_task_report["context_snapshot"] = redact_secrets(context + "\n\n" + memory_text)[:18000]
@@ -1003,7 +1028,7 @@ class MultiModelAgent:
 
     def _architect_task(self, task, previous_report=None):
         """Use one configured hosted model to create a validated task contract."""
-        fallback = fallback_specification(task)
+        fallback = fallback_specification(task, workspace_files=self.workspace_context.files())
         metadata = {"provider": "none", "model": "none", "status": "NOT RUN", "error": None}
         if not self.config.get("task_architect_enabled", True) or self.classify_task(task) != "COMPLEX":
             metadata["status"] = "SKIPPED (simple task)"
@@ -1147,6 +1172,9 @@ class MultiModelAgent:
                     added, removed = None, None
                 self.emit_event("file.activity", action=action, path=relative,
                                 lines=line_count, added=added, removed=removed)
+        if name == "create_folder" and isinstance(result, dict) and result.get("success"):
+            folder = str(arguments.get("path", "")).replace("\\", "/").strip("/")
+            self.emit_event("file.activity", action="folder_created", path=folder)
         if command_snapshot is not None:
             self._emit_command_file_changes(command_snapshot)
 
@@ -1355,6 +1383,8 @@ class MultiModelAgent:
         self.show_status("Preparing implementation")
         provider = str(coder_provider or self.config.get("provider", "ollama" if self.config.get("execution_mode") == "offline" else "groq")).lower()
         client = self.get_client("coder", provider=provider) if coder_provider else self.get_client("coder")
+        if self._active_task_deadline is None:
+            self._active_task_deadline = time.monotonic() + self.task_deadline_seconds
         reports = reports if isinstance(reports, dict) else {}
         previous_report = reports.get("previous_task_report", {})
         previous_execution = self.last_task_report if isinstance(self.last_task_report, dict) else {}
@@ -1452,8 +1482,11 @@ Workspace root is the current directory. Keep file operations inside it.
             ),
         })
         base_system_prompt = system_prompt
+        self._context_dirty = True
 
         def refresh_system_context():
+            if not self._context_dirty:
+                return
             current_context = self._workspace_context_text(
                 task,
                 previous_report=previous_report,
@@ -1463,12 +1496,15 @@ Workspace root is the current directory. Keep file operations inside it.
                 "role": "system",
                 "content": base_system_prompt + "\n\nCURRENT WORKSPACE CONTEXT:\n" + current_context,
             }
+            self._context_dirty = False
 
         malformed_tool_retries = 0
         completion_retries = 0
         empty_response_retries = 0
         disable_tools_next = False
         successful_mutation_calls = set()
+        failed_command_calls = {}
+        mutation_generation = 0
         executed_tool_calls = 0
         mutation_needs_verification = False
         last_action_signature = None
@@ -1485,7 +1521,12 @@ Workspace root is the current directory. Keep file operations inside it.
         consecutive_no_progress = 0
         no_progress_recoveries = 0
 
+        deadline_reached = False
         for _ in range(self.max_steps):
+            if time.monotonic() >= self._active_task_deadline:
+                deadline_reached = True
+                self.show_status("Task deadline reached; stopping and reporting verified work.")
+                break
             self.show_status("Working")
             self.emit_event("step.started", phase="model")
             refresh_system_context()
@@ -1561,11 +1602,7 @@ Workspace root is the current directory. Keep file operations inside it.
                     continue
 
                 missing_artifacts = []
-                expected_paths = list(_expected_artifact_paths(task_context))
-                for item in ((self.last_task_report or {}).get("specification") or {}).get("expected_files", []):
-                    path = item.get("path") if isinstance(item, dict) else None
-                    if path and path not in expected_paths:
-                        expected_paths.append(path)
+                expected_paths = self._task_expected_paths(task_context)
                 for artifact in expected_paths:
                     full_path = os.path.realpath(os.path.join(self.workspace, artifact))
                     workspace_root = os.path.realpath(self.workspace)
@@ -1696,7 +1733,7 @@ Workspace root is the current directory. Keep file operations inside it.
             productive_step = False
             # Execute one-action-at-a-time tool requests and give local models readable
             # results instead of a synthetic tool-call protocol they may echo forever.
-            duplicate_mutation = False
+            blocked_duplicate_action = False
             parallel_reads = self._run_independent_reads(tool_calls)
             for tool_index, tool_call in enumerate(tool_calls):
                 name = tool_call.function.name
@@ -1714,16 +1751,31 @@ Workspace root is the current directory. Keep file operations inside it.
                     last_action_signature = signature
                     repeated_action_count = 1
 
-                if name in {"create_folder", "write_file", "edit_file"} and signature in successful_mutation_calls:
+                duplicate_successful_mutation = (
+                    name in {"create_folder", "write_file", "edit_file"}
+                    and signature in successful_mutation_calls
+                )
+                duplicate_failed_command = (
+                    name == "run_command"
+                    and failed_command_calls.get(signature) == mutation_generation
+                )
+                if duplicate_successful_mutation or duplicate_failed_command:
                     tool_result = {
                         "success": False,
                         "error": (
-                            "Duplicate mutation blocked: this exact action already "
-                            "succeeded. Choose the next missing step."
+                            "Repeated action blocked: this command already failed and no source file "
+                            "has changed since. Fix the implementation or choose a different check."
+                            if duplicate_failed_command else
+                            "Duplicate mutation blocked: this exact action already succeeded. Choose the next missing step."
                         ),
                     }
-                    duplicate_mutation = True
+                    blocked_duplicate_action = True
                     tool_message = None
+                    if duplicate_failed_command:
+                        self.emit_event(
+                            "activity",
+                            message="Repeated action detected; trying a different check or fixing the source first.",
+                        )
                 else:
                     tool_message = parallel_reads.get(tool_index) or self._tool_message(tool_call)
                     try:
@@ -1737,6 +1789,13 @@ Workspace root is the current directory. Keep file operations inside it.
                         and tool_result.get("success") is True
                     ):
                         successful_mutation_calls.add(signature)
+                    if name in {"write_file", "edit_file"} and isinstance(tool_result, dict) and tool_result.get("success") is True:
+                        mutation_generation += 1
+                    if name == "run_command" and isinstance(tool_result, dict):
+                        if tool_result.get("success") is True and tool_result.get("return_code") == 0:
+                            failed_command_calls.pop(signature, None)
+                        elif tool_result.get("success") is False or tool_result.get("return_code") not in {None, 0}:
+                            failed_command_calls[signature] = mutation_generation
 
                 executed_tool_calls += 1
                 if (
@@ -1761,7 +1820,7 @@ Workspace root is the current directory. Keep file operations inside it.
                         mutation_needs_verification = True
                         if not verification.get("success"):
                             self.show_status(f"Automatic verification failed for {path}")
-                if name == "run_command" and isinstance(tool_result, dict):
+                if name == "run_command" and isinstance(tool_result, dict) and not blocked_duplicate_action:
                     command = redact_secrets(str(arguments.get("command", "")))
                     record = {
                         "command": command,
@@ -1806,7 +1865,7 @@ Workspace root is the current directory. Keep file operations inside it.
                             "run a relevant check and inspect the result before finishing."
                         ),
                     })
-                elif duplicate_mutation:
+                elif blocked_duplicate_action:
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
@@ -1815,12 +1874,12 @@ Workspace root is the current directory. Keep file operations inside it.
                 else:
                     messages.append(tool_message)
 
-            if duplicate_mutation:
+            if blocked_duplicate_action:
                 messages.append({
                     "role": "user",
                     "content": (
-                        "A repeated file/folder mutation was blocked. Continue the original "
-                        "task with the next distinct action; do not repeat the same JSON. "
+                        "A repeated action was blocked. Continue the original task with a distinct "
+                        "action; do not repeat the same failing command without changing source code. "
                         "Write the actual implementation, then run a syntax check/test and "
                         "inspect the result. Finish only after verifying the workspace."
                     ),
@@ -1843,9 +1902,7 @@ Workspace root is the current directory. Keep file operations inside it.
                     recovered_files = self._generate_missing_files_locally(
                         client,
                         task_context,
-                        list(dict.fromkeys(_expected_artifact_paths(task_context) + [
-                            item["path"] for item in ((self.last_task_report or {}).get("specification") or {}).get("expected_files", [])
-                        ])),
+                        self._task_expected_paths(task_context),
                     )
                     if recovered_files:
                         summary = (
@@ -1885,6 +1942,17 @@ Workspace root is the current directory. Keep file operations inside it.
                     ),
                 })
 
+        if deadline_reached:
+            self.last_task_report["deadline_reached"] = True
+            self.last_task_report["deadline_seconds"] = self.task_deadline_seconds
+            self.last_task_report["verification_status"] = (
+                "PARTIAL" if self.last_task_report.get("changed_files") else "BLOCKED"
+            )
+            return self._format_final_report(
+                f"Task deadline reached after {self.task_deadline_seconds} seconds. "
+                "The task is not marked complete unless its recorded checks passed."
+            )
+
         # The step cap is a safety net, not an excuse to leave a coding task half done.
         # Before reporting a limit, make one constrained recovery attempt for missing files.
         missing_at_limit = self._missing_expected_artifacts(task_context)
@@ -1892,7 +1960,7 @@ Workspace root is the current directory. Keep file operations inside it.
             self.show_status("Step budget reached; recovering missing implementation files")
             local_fallback_attempted = True
             recovered_files = self._generate_missing_files_locally(
-                client, task_context, _expected_artifact_paths(task_context)
+                client, task_context, self._task_expected_paths(task_context)
             )
             if recovered_files:
                 summary = "Recovered the missing implementation after the normal tool loop made insufficient progress."
@@ -1963,6 +2031,7 @@ Workspace root is the current directory. Keep file operations inside it.
         """Architect the request, run the local agent, then escalate once if configured."""
         self.current_task_id = uuid.uuid4().hex
         task_started = time.monotonic()
+        self._active_task_deadline = task_started + self.task_deadline_seconds
         self.emit_event("task.started", task=task, workspace=self.workspace)
         self.show_status("Inspecting workspace and loading project context")
         self.workspace_memory.refresh()
@@ -2019,14 +2088,22 @@ Workspace root is the current directory. Keep file operations inside it.
             except Exception as error:
                 previous_execution = self.last_task_report if isinstance(self.last_task_report, dict) else {}
                 self.last_task_report = {
-                    "task": task, "changed_files": [], "commands": [], "static_checks": [],
-                    "specification": specification, "architect": architect,
-                    "coder": {"provider": provider, "model": model},
-                    "escalations": [], "initial_error": f"{type(error).__name__}: {redact_secrets(str(error))}",
-                    "verification_status": "FAIL",
-                    "llm_requests": list(previous_execution.get("llm_requests", [])),
-                    "llm_attempts": list(previous_execution.get("llm_attempts", [])),
-                    "tool_durations": list(previous_execution.get("tool_durations", [])),
+                    **previous_execution,
+                    "task": task,
+                    "changed_files": list(previous_execution.get("changed_files", [])),
+                    "commands": list(previous_execution.get("commands", [])),
+                    "static_checks": list(previous_execution.get("static_checks", [])),
+                    "specification": specification,
+                    "architect": architect,
+                    "coder": previous_execution.get(
+                        "coder", {"provider": provider, "model": model}
+                    ),
+                    "escalations": list(previous_execution.get("escalations", [])),
+                    "initial_error": f"{type(error).__name__}: {redact_secrets(str(error))}",
+                    "verification_status": previous_execution.get(
+                        "verification_status",
+                        "PARTIAL" if previous_execution.get("changed_files") else "FAIL",
+                    ),
                 }
                 recovered_result = self._recover_car_game_after_provider_failure(
                     task, specification, error

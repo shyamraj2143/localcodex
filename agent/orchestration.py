@@ -98,42 +98,70 @@ def parse_specification(text: str) -> dict[str, Any]:
     return validate_specification(_json_object(text))
 
 
-def fallback_specification(task: str) -> dict[str, Any]:
+def fallback_specification(task: str, workspace_files: list[str] | None = None) -> dict[str, Any]:
     """Build a deterministic spec when hosted planning is unavailable."""
     task = re.sub(r"\s+", " ", task).strip()
-    calculator = bool(re.search(r"\b(calculator|calculater|calc)\b", task, re.IGNORECASE))
-    folder_match = re.search(r"\b(?:folder|directory)\s+(?:named\s+|called\s+|ka\s+naam\s+)?[\"']?([A-Za-z][\w-]*)", task, re.IGNORECASE)
-    project_dir = folder_match.group(1).lower() if folder_match and folder_match.group(1).lower() not in {"banao", "create", "make", "aur", "and"} else None
-    if calculator:
-        project_dir = project_dir or "calculator"
-        prefix = project_dir + "/"
-        paths = [prefix + path for path in ("main.py", "calculator_logic.py", "README.md", "tests/test_calculator_logic.py")]
-        return validate_specification({
-            "task_type": "calculator_development", "project_name": project_dir,
-            "intended_outcome": task, "language": "Python",
-            "framework": "tkinter GUI with safe AST expression evaluator",
-            "features": ["basic arithmetic", "decimal and negative numbers", "parentheses and operator precedence", "clear, backspace, and input validation"],
-            "expected_files": [{"path": path, "responsibility": "Calculator source, usage guide, or focused tests"} for path in paths],
-            "dependencies": [], "run_commands": [f"python {prefix}main.py"],
-            "test_commands": [f"python -m unittest discover -s {prefix}tests -v"],
-            "acceptance_criteria": ["Arithmetic is evaluated without unrestricted eval", "Core arithmetic tests pass", "GUI starts when a display is available"],
-            "assumptions": ["Use standard-library tkinter and no network-installed dependencies."],
-            "definition_of_done": "Calculator source, documentation, and tests exist and core arithmetic tests pass.",
-        })
-    game = bool(re.search(r"\b(game|खेल)\b", task, re.IGNORECASE))
     named_files = list(dict.fromkeys(re.findall(
         r"(?i)(?:[A-Za-z0-9_.-]+[\\/])*[A-Za-z0-9_-]+\.(?:py|pyw|js|jsx|ts|tsx|html|css|json|md|txt|java|cpp|c|cs|go|rs|php|sql|yml|yaml|toml|sh|bat|ps1)",
         task,
     )))
+    edit_intent = bool(re.search(r"\b(fix|debug|repair|change|update|modify|improve|refactor|optimi[sz]e|resolve|bug|error|issue)\b", task, re.IGNORECASE))
+    if edit_intent and not named_files and workspace_files:
+        tokens = {token.lower() for token in re.findall(r"[A-Za-z0-9_]{3,}", task)}
+        tokens -= {"please", "could", "would", "should", "with", "from", "this", "that", "into", "error", "issue"}
+        ranked = []
+        for path in workspace_files:
+            lowered = str(path).replace("\\", "/").lower()
+            suffix = Path(lowered).suffix
+            if suffix not in {".py", ".pyw", ".js", ".ts", ".tsx", ".jsx", ".java", ".go", ".rs", ".cpp", ".c", ".cs"}:
+                continue
+            if "/test" in lowered or Path(lowered).name.startswith("test_"):
+                continue
+            path_tokens = set(re.findall(r"[a-z0-9_]{3,}", Path(lowered).stem))
+            score = len(tokens & path_tokens)
+            if score:
+                ranked.append((score, lowered))
+        if ranked:
+            best = max(score for score, _path in ranked)
+            relevant = [path for score, path in ranked if score == best][:4]
+            return validate_specification({
+                "task_type": "software_change", "project_name": "existing project",
+                "intended_outcome": task, "language": "Use the existing project language",
+                "framework": "Preserve existing project conventions", "features": [task],
+                "expected_files": [{"path": path, "responsibility": "Existing source matched to the requested change"} for path in relevant],
+                "dependencies": [], "run_commands": [], "test_commands": [],
+                "acceptance_criteria": ["The requested change is implemented and relevant checks pass"],
+                "assumptions": ["Only source files relevant to the requested change are in scope."],
+                "definition_of_done": "The requested change is implemented and verified.",
+            })
+    calculator = bool(re.search(r"\b(calculator|calculater|calc)\b", task, re.IGNORECASE))
+    folder_match = re.search(r"\b(?:folder|directory)\s+(?:named\s+|called\s+|ka\s+naam\s+)?[\"']?([A-Za-z][\w-]*)", task, re.IGNORECASE)
+    project_dir = folder_match.group(1).lower() if folder_match and folder_match.group(1).lower() not in {"banao", "create", "make", "aur", "and"} else None
+    if not project_dir:
+        preceding_folder = re.search(r"\b([A-Za-z][\w-]*)\s+(?:project\s+)?folder\b", task, re.IGNORECASE)
+        if preceding_folder:
+            project_dir = preceding_folder.group(1).lower()
+    if calculator:
+        prefix = f"{project_dir}/" if project_dir else ""
+        paths = named_files or [prefix + "main.py"]
+        return validate_specification({
+            "task_type": "calculator_development", "project_name": project_dir or "calculator",
+            "intended_outcome": task, "language": "Python",
+            "framework": "tkinter GUI with safe AST expression evaluator",
+            "features": ["basic arithmetic", "decimal and negative numbers", "parentheses and operator precedence", "clear, backspace, and input validation"],
+            "expected_files": [{"path": path, "responsibility": "Requested calculator deliverable"} for path in paths],
+            "dependencies": [], "run_commands": [f"python {paths[0]}"] if paths[0].endswith(".py") else [],
+            "test_commands": [],
+            "acceptance_criteria": ["Arithmetic uses safe expression handling and requested controls work", "GUI starts when a display is available"],
+            "assumptions": ["Use standard-library tkinter and no network-installed dependencies."],
+            "definition_of_done": "The requested calculator behavior is implemented and its source file passes applicable checks.",
+        })
+    game = bool(re.search(r"\b(game|खेल)\b", task, re.IGNORECASE))
     name_match = re.search(r"\b(?:called|named|name|titled)\s+([A-Za-z][\w-]*)", task, re.IGNORECASE)
     name = name_match.group(1).lower() if name_match else ("game" if game else "project")
     if game:
-        expected = [
-            {"path": "main.py", "responsibility": "Playable game entry point and interface"},
-            {"path": "README.md", "responsibility": "Setup and run instructions"},
-            {"path": "requirements.txt", "responsibility": "Runtime dependencies"},
-            {"path": "tests/test_game_logic.py", "responsibility": "Automated tests for core game rules"},
-        ]
+        expected = [{"path": path, "responsibility": "Requested playable game deliverable"}
+                    for path in (named_files or ["main.py"])]
         return validate_specification({
             "task_type": "game_development", "project_name": name,
             "intended_outcome": "A playable game with real interactive gameplay, not a placeholder.",
@@ -141,10 +169,10 @@ def fallback_specification(task: str) -> dict[str, Any]:
             "features": ["game loop", "keyboard input", "game rules and state updates", "score or progression", "collision and game-over state", "restart behavior"],
             "expected_files": expected, "dependencies": [],
             "run_commands": ["python main.py"],
-            "test_commands": ["python -m unittest discover -s tests -v"],
-            "acceptance_criteria": ["Core gameplay rules are tested", "The game responds to player input", "The README documents setup and controls"],
+            "test_commands": [],
+            "acceptance_criteria": ["The game responds to player input and implements the requested gameplay"],
             "assumptions": ["Use a small, self-contained 2D game with procedural visuals and Python's standard-library GUI unless the user specified a framework."],
-            "definition_of_done": "Expected files exist, contain a playable game rather than placeholder output, and automated game logic tests pass.",
+            "definition_of_done": "The requested game entry point exists and implements playable input-driven gameplay.",
         })
     website = bool(re.search(r"\b(website|web site|web page|frontend|landing page)\b", task, re.IGNORECASE))
     api = bool(re.search(r"\b(api|backend|rest service)\b", task, re.IGNORECASE))
@@ -154,26 +182,28 @@ def fallback_specification(task: str) -> dict[str, Any]:
         prefix = f"{project_dir}/" if project_dir else ""
         if website:
             task_type, language, framework = "website_development", "HTML, CSS, and JavaScript", "Vanilla browser APIs"
-            paths = ("index.html", "styles.css", "script.js", "README.md", "tests/test_app.py")
+            paths = ("index.html",)
         elif api:
             task_type, language, framework = "api_development", "Python", "Python standard-library HTTP server"
-            paths = ("main.py", "README.md", "tests/test_api.py")
+            paths = ("main.py",)
         elif cli:
             task_type, language, framework = "cli_development", "Python", "Python standard library"
-            paths = ("main.py", "README.md", "tests/test_cli.py")
+            paths = ("main.py",)
         else:
             task_type, language, framework = "software_development", "Use the repository's existing language", "Preserve existing conventions"
-            paths = ("main.py", "README.md", "tests/test_main.py")
+            paths = ("main.py",)
+        paths = tuple(dict.fromkeys([*paths, *named_files]))
         return validate_specification({
             "task_type": task_type, "project_name": name,
             "intended_outcome": task, "language": language, "framework": framework,
             "features": [task],
-            "expected_files": [{"path": prefix + path, "responsibility": "Application source, usage instructions, or focused tests"} for path in paths],
-            "dependencies": [], "run_commands": [f"python {prefix}main.py"] if not website else [],
-            "test_commands": [f"python -m unittest discover -s {prefix}tests -v"],
-            "acceptance_criteria": ["The requested application behavior is implemented", "Relevant focused tests pass", "The README explains how to run the application"],
+            "expected_files": [{"path": path, "responsibility": "Requested application deliverable"}
+                               for path in (named_files or [prefix + paths[0]])],
+            "dependencies": [], "run_commands": ([f"python {named_files[0]}"] if named_files and named_files[0].endswith(".py") else [f"python {prefix}main.py"]) if not website else [],
+            "test_commands": [],
+            "acceptance_criteria": ["The requested application behavior is implemented and applicable checks pass"],
             "assumptions": ["Prefer locally available standard-library or browser capabilities; do not install packages during offline work."],
-            "definition_of_done": "Application source, usage documentation, and focused tests exist and verification passes.",
+            "definition_of_done": "The requested application source exists and applicable verification passes.",
         })
     return validate_specification({
         "task_type": "software_change", "project_name": name,

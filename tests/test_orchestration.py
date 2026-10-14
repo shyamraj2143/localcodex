@@ -21,11 +21,11 @@ from tools.terminal import run_command
 
 
 class OrchestrationTests(unittest.TestCase):
-    def test_game_fallback_spec_is_complete_and_dynamic(self):
+    def test_game_fallback_requires_only_the_requested_entrypoint(self):
         spec = fallback_specification("Build a playable game called comet_run")
         self.assertEqual(spec["task_type"], "game_development")
         self.assertEqual(spec["project_name"], "comet_run")
-        self.assertIn("tests/test_game_logic.py", [item["path"] for item in spec["expected_files"]])
+        self.assertEqual([item["path"] for item in spec["expected_files"]], ["main.py"])
 
     def test_structured_spec_parses_json_and_rejects_unsafe_paths(self):
         source = fallback_specification("Fix the app")
@@ -33,6 +33,13 @@ class OrchestrationTests(unittest.TestCase):
         source["expected_files"] = [{"path": "../outside.py", "responsibility": "escape"}]
         with self.assertRaises(SpecificationError):
             validate_specification(source)
+
+    def test_edit_fallback_selects_relevant_existing_source_without_extra_files(self):
+        spec = fallback_specification(
+            "Fix the calculator error",
+            workspace_files=["calculator.py", "main.py", "README.md", "tests/test_calculator.py"],
+        )
+        self.assertEqual([item["path"] for item in spec["expected_files"]], ["calculator.py"])
 
     def test_game_completeness_rejects_hello_world_and_accepts_game_logic(self):
         spec = {"task_type": "game_development", "expected_files": [{"path": "main.py", "responsibility": "game"}]}

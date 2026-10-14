@@ -70,6 +70,28 @@ def test_agent_loop_limit_is_configurable_and_bounded(tmp_path):
     assert MultiModelAgent({"max_agent_steps": 1000}, {}, [], str(tmp_path)).max_steps == 80
 
 
+def test_total_worker_budget_caps_tool_and_llm_concurrency(tmp_path):
+    agent = MultiModelAgent({
+        "max_total_workers": 3,
+        "max_parallel_tool_workers": 4,
+        "max_concurrent_llm_requests": 2,
+    }, {}, [], str(tmp_path))
+    assert agent.max_workers == 2
+    assert agent.max_concurrent_llm_requests == 1
+    assert agent.max_workers + agent.max_concurrent_llm_requests <= agent.max_total_workers
+
+
+def test_task_deadline_stops_before_another_model_request(tmp_path):
+    agent = MultiModelAgent({"provider": "ollama", "task_deadline_seconds": 30}, {}, [], str(tmp_path))
+    agent.get_client = lambda *args, **kwargs: SimpleNamespace(model="mock")
+    agent._active_task_deadline = time.monotonic() - 1
+    result = agent.integrate("Create a small app", {
+        "specification": {"expected_files": [], "acceptance_criteria": [], "test_commands": []}
+    })
+    assert "Task deadline reached after 30 seconds" in result
+    assert agent.last_task_report["verification_status"] == "BLOCKED"
+
+
 def test_read_worker_timeout_returns_failure_and_requests_cancellation(tmp_path):
     def slow_read(workspace, path):
         time.sleep(0.2)

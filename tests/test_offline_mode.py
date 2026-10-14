@@ -92,7 +92,8 @@ class OfflineModeTests(unittest.TestCase):
         self.assertEqual(website["task_type"], "website_development")
         self.assertIn("index.html", [item["path"] for item in website["expected_files"]])
         self.assertEqual(api["task_type"], "api_development")
-        self.assertIn("tests/test_api.py", [item["path"] for item in api["expected_files"]])
+        self.assertEqual([item["path"] for item in api["expected_files"]], ["main.py"])
+        self.assertEqual(api["test_commands"], [])
 
     def test_missing_local_model_error_is_actionable_without_auto_pull(self):
         client = OllamaClient(model="missing-model")

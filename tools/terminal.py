@@ -2,6 +2,7 @@
 
 import os
 import locale
+import signal
 import subprocess
 import time
 import re
@@ -50,44 +51,74 @@ def run_command(workspace, command, timeout=120, offline=False):
             }
 
     try:
-        result = subprocess.run(
+        timeout = max(0.1, float(timeout))
+        process_options = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "encoding": locale.getpreferredencoding(False),
+            "errors": "replace",
+        }
+        if os.name == "nt":
+            process_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            process_options["start_new_session"] = True
+        process = subprocess.Popen(
             command,
             shell=True,
             cwd=workspace,
-            capture_output=True,
-            text=True,
-            encoding=locale.getpreferredencoding(False),
-            errors="replace",
-            timeout=timeout,
-            check=False,
+            **process_options,
         )
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            if os.name == "nt":
+                # `shell=True` starts cmd.exe; terminate its whole process tree so
+                # child commands cannot outlive the agent's timeout.
+                try:
+                    subprocess.run(
+                        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=5,
+                        check=False,
+                    )
+                except (OSError, subprocess.SubprocessError):
+                    process.kill()
+            else:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except (OSError, ProcessLookupError):
+                    process.kill()
+            try:
+                stdout, stderr = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate()
+            return {
+                "success": False,
+                "command": command,
+                "cwd": workspace,
+                "return_code": process.returncode,
+                "stdout": stdout or _decode_timeout_output(error.stdout),
+                "stderr": stderr or _decode_timeout_output(error.stderr),
+                "duration_seconds": time.monotonic() - started,
+                "timed_out": True,
+                "blocked": False,
+                "error": f"Command timed out after {timeout:g} seconds and was terminated.",
+            }
         return {
-            "success": result.returncode == 0,
+            "success": process.returncode == 0,
             "command": command,
             "cwd": workspace,
-            "return_code": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
+            "return_code": process.returncode,
+            "stdout": stdout,
+            "stderr": stderr,
             "duration_seconds": time.monotonic() - started,
             "timed_out": False,
             "blocked": False,
-        }
-    except subprocess.TimeoutExpired as error:
-        def decode(value):
-            if isinstance(value, bytes):
-                return value.decode(locale.getpreferredencoding(False), errors="replace")
-            return value or ""
-        return {
-            "success": False,
-            "command": command,
-            "cwd": workspace,
-            "return_code": None,
-            "stdout": decode(error.stdout),
-            "stderr": decode(error.stderr),
-            "duration_seconds": time.monotonic() - started,
-            "timed_out": True,
-            "blocked": False,
-            "error": f"Command timed out after {timeout} seconds.",
         }
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         return {
@@ -102,3 +133,9 @@ def run_command(workspace, command, timeout=120, offline=False):
             "blocked": False,
             "error": str(error),
         }
+
+
+def _decode_timeout_output(value):
+    if isinstance(value, bytes):
+        return value.decode(locale.getpreferredencoding(False), errors="replace")
+    return value or ""

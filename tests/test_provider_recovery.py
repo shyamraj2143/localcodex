@@ -1,7 +1,9 @@
+import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from agent.loop import MultiModelAgent
+from agent.verification import verify_changed_file
 from main import offer_provider_recovery
 from tools.registry import get_tool_schemas, get_tools
 
@@ -130,3 +132,39 @@ def test_retry_attempts_are_counted_individually():
     assert [attempt["success"] for attempt in agent.last_task_report["llm_attempts"]] == [False, True]
     assert len(agent.last_task_report["llm_requests"]) == 1
     assert agent.last_task_report["llm_requests"][0]["success"] is True
+
+
+def test_timeout_after_verified_file_changes_preserves_real_execution_evidence(tmp_path):
+    agent = MultiModelAgent({
+        "execution_mode": "offline", "provider": "ollama", "local_model": "mock",
+        "max_escalations": 0, "persistent_memory_enabled": False,
+    }, {}, [], str(tmp_path))
+    specification = {
+        "task_type": "software_change", "expected_files": [
+            {"path": "main.py", "responsibility": "Requested source"}
+        ], "test_commands": [], "acceptance_criteria": [],
+    }
+    agent._architect_task = lambda task, previous_report=None: (
+        specification, {"provider": "none", "model": "none", "status": "SKIPPED"}
+    )
+
+    def timed_out_after_check(task, reports=None, coder_provider=None):
+        source = tmp_path / "main.py"
+        source.write_text("def answer():\n    return 42\n", encoding="utf-8")
+        command = f'"{sys.executable}" -m py_compile main.py'
+        agent.last_task_report = {
+            "task": task, "changed_files": ["main.py"], "static_checks": [
+                verify_changed_file(str(tmp_path), "main.py")
+            ], "commands": [{
+                "command": command, "return_code": 0, "success": True,
+                "meaningful_check": True, "stdout": "", "stderr": "",
+            }], "verification_status": "PARTIAL",
+        }
+        raise TimeoutError("local model stalled after verification")
+
+    agent.integrate = timed_out_after_check
+    result = agent.run("Fix main.py and verify it.")
+    assert agent.last_task_report["changed_files"] == ["main.py"]
+    assert agent.last_task_report["commands"][0]["return_code"] == 0
+    assert agent.last_task_report["verification_status"] == "PASS"
+    assert "TimeoutError" in result

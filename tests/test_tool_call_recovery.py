@@ -32,6 +32,30 @@ class FakeClient:
 
 
 class RecoverTextToolCallTests(unittest.TestCase):
+    def test_failed_command_is_not_reexecuted_without_a_source_change(self):
+        command_calls = []
+
+        def failing_command(workspace, command, **kwargs):
+            command_calls.append(command)
+            return {"success": False, "command": command, "return_code": 1,
+                    "stdout": "", "stderr": "test collection failed"}
+
+        command = '{"name":"run_command","arguments":{"command":"python -m pytest"}}'
+        fake_client = FakeClient([command, command, "The check is still failing; inspect the test setup."])
+        with tempfile.TemporaryDirectory() as workspace:
+            agent = MultiModelAgent(
+                {"provider": "ollama", "local_model": "test-model", "max_agent_steps": 4},
+                {"run_command": failing_command}, [], workspace,
+            )
+            agent.get_client = lambda role="coder": fake_client
+            agent.integrate("Run the project tests.", {
+                "specification": {"expected_files": [], "acceptance_criteria": [],
+                                  "test_commands": []}
+            })
+
+        self.assertEqual(command_calls, ["python -m pytest"])
+        self.assertEqual(len(agent.last_task_report["commands"]), 1)
+
     def test_recovers_json_tool_call(self):
         raw = json.dumps({
             "name": "create_folder",
@@ -68,6 +92,17 @@ class RecoverTextToolCallTests(unittest.TestCase):
             _expected_artifact_paths("create a calculator system"),
             ["calculator.py", "test_calculator.py"],
         )
+
+    def test_validated_task_spec_is_the_only_recovery_deliverable_source(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            agent = MultiModelAgent({"provider": "ollama"}, {}, [], workspace)
+            agent.last_task_report = {"specification": {
+                "expected_files": [{"path": "src/main.py"}]
+            }}
+            self.assertEqual(
+                agent._task_expected_paths("create calculator app"),
+                ["src/main.py"],
+            )
 
     def test_final_report_cannot_pass_when_requested_calculator_files_are_missing(self):
         with tempfile.TemporaryDirectory() as workspace:

@@ -2,7 +2,9 @@
 
 from collections import OrderedDict
 from datetime import datetime, timezone
+from agent.orchestration import redact_secrets
 import sys
+import os
 import threading
 import time
 
@@ -74,6 +76,8 @@ class TerminalDashboard:
         self.verification = []
         self.commands = []
         self.unresolved_issues = []
+        self.last_error = ""
+        self.created_folders = set()
         self.gui_status = "Not recorded"
         self.verification_status = "Not verified"
         self.workflow = {key: "pending" for key, _label in self.WORKFLOW}
@@ -113,6 +117,8 @@ class TerminalDashboard:
             elif kind == "model.response":
                 ok = event.get("success", True)
                 error = str(event.get("error", "")).strip()
+                if error:
+                    self.last_error = redact_secrets(error)
                 self._set_activity(
                     "AI returned its next action." if ok else "AI request failed; the agent will handle the error.",
                     reason=(f"Model response in {self._duration(event.get('duration'))}."
@@ -120,6 +126,7 @@ class TerminalDashboard:
                     technical=f"Model response success={ok}" + (f"; {error}" if error else ""),
                 )
             elif kind == "provider.retry":
+                self.last_error = redact_secrets(str(event.get("error", "Temporary request error")))
                 self._set_activity(
                     f"{event.get('provider', 'AI provider')} is temporarily unavailable; retrying.",
                     reason=(f"Retry {event.get('attempt', '?')} of {event.get('attempts', '?')} "
@@ -164,7 +171,7 @@ class TerminalDashboard:
                     self.live.stop()
                     self.live = None
                 else:
-                    print(self._plain_summary(), file=self.stream)
+                    print(self._plain_summary(), file=self.stream, flush=True)
             self._refresh()
 
     def _start_task(self, event):
@@ -184,6 +191,8 @@ class TerminalDashboard:
         self.verification.clear()
         self.commands.clear()
         self.unresolved_issues.clear()
+        self.last_error = ""
+        self.created_folders.clear()
         self.gui_status = "Not recorded"
         self.verification_status = "Not verified"
         self._set_activity("Understanding your request", reason="The agent begins by identifying the requested outcome.")
@@ -192,7 +201,8 @@ class TerminalDashboard:
                              refresh_per_second=4, screen=False, transient=False, auto_refresh=True)
             self.live.start()
         elif not self.rich_enabled:
-            print(f"\nLOCAL CODEX | {self.provider} / {self.model} | {self.execution_mode}\nWorkspace: {self.workspace}\nTask: {self.task}", file=self.stream)
+            project = os.path.basename(os.path.normpath(self.workspace)) or self.workspace
+            print(f"\nLOCAL CODEX | {self.provider} / {self.model} | {self.execution_mode}\nWorkspace: {project} ({self.workspace})", file=self.stream, flush=True)
 
     def _handle_status(self, raw):
         text = raw.strip()
@@ -243,6 +253,7 @@ class TerminalDashboard:
             return
         if result.get("success") is False:
             error = str(result.get("error", "Unknown error"))[:240]
+            self.last_error = error
             self._set_phase("repairing", "Repairing", "A tool operation failed; its error is returned to the agent for its next decision.")
             message = self._say("The file could not be read.", "File read nahi ho saki.") if tool == "read_file" else f"{self._tool_friendly_name(tool)} failed."
             self._set_activity(message, reason=f"Error: {error}", technical=f"{tool} error: {error}")
@@ -285,6 +296,10 @@ class TerminalDashboard:
     def _handle_file(self, event):
         path = str(event.get("path", ""))
         action = str(event.get("action", "read"))
+        if action == "folder_created":
+            self.created_folders.add(path)
+            self._set_activity(f"Project folder created: {path}", reason="The folder tool reported success.")
+            return
         prior = self.files.get(path, {})
         added, removed = event.get("added"), event.get("removed")
         if action == "deleted":
@@ -371,22 +386,22 @@ class TerminalDashboard:
             self.explanation = str(explanation)
 
     def _set_activity(self, message, reason="", technical=""):
-        self.activity = str(message)
-        self.current_reason = str(reason)
+        self.activity = redact_secrets(str(message))
+        self.current_reason = redact_secrets(str(reason))
         item = {"message": self.activity, "reason": str(reason), "time": time.monotonic()}
         if technical:
-            item["technical"] = str(technical)
+            item["technical"] = redact_secrets(str(technical))
         if not self.activity_log or self.activity_log[-1]["message"] != item["message"]:
             self.activity_log.append(item)
             self.activity_log = self.activity_log[-10:]
         if technical:
-            self.technical_log.append(f"{self.activity} | {technical}")
+            self.technical_log.append(redact_secrets(f"{self.activity} | {technical}"))
             self.technical_log = self.technical_log[-30:]
 
     def _technical_event(self, event):
         if event["event"] in {"activity", "step.started", "tool.started", "tool.finished", "model.request", "model.response"}:
             detail = {key: value for key, value in event.items() if key not in {"event", "timestamp"}}
-            self.technical_log.append(f"{event['event']}: {detail}")
+            self.technical_log.append(redact_secrets(f"{event['event']}: {detail}"))
             self.technical_log = self.technical_log[-30:]
 
     def _refresh(self):
@@ -395,139 +410,65 @@ class TerminalDashboard:
             self.live.update(self._render(), refresh=False)
         elif self.started_at is not None and self.activity:
             if self.activity != self._last_printed_activity:
-                print(f"  {self.activity}", file=self.stream)
+                print(f"  {self.activity}", file=self.stream, flush=True)
                 self._last_printed_activity = self.activity
-                if self.current_reason:
-                    print(f"    Why/result: {self.current_reason}", file=self.stream)
 
     def _render(self):
         if not self.rich_enabled:
             return self.activity
-        running = sum(item["status"] == "RUNNING" for item in self.workers.values())
-        header = Panel(
-            f"[bold cyan]LOCAL CODEX[/bold cyan]  {self.provider} / {self.model}  [{self.execution_mode}]  "
-            f"[{running} active worker(s)]\n[dim]{self.workspace}[/dim]",
-            title="Student Day · AI coding session", border_style="cyan",
-        )
-        current = Panel(
-            f"[bold]Request[/bold]\n{self.task}\n\n[bold]Current phase:[/bold] {self.phase}\n"
-            f"[bold]What is happening:[/bold] {self.activity}\n[dim]{self.explanation}[/dim]\n"
-            f"[bold]Task status:[/bold] {self.task_status}",
-            title="Current task", border_style="blue",
-        )
-        workflow = Table(show_header=False, box=None, padding=(0, 1))
-        workflow.add_column("State", width=3)
-        workflow.add_column("Phase")
-        symbols = {"complete": "✓", "active": "●", "failed": "!", "skipped": "–", "pending": "○"}
-        for key, label in self.WORKFLOW:
-            state = self.workflow[key]
-            workflow.add_row(symbols[state], label)
-        workflow_panel = Panel(workflow, title="Workflow", border_style="magenta")
-        activity_lines = []
-        for item in self.activity_log[-6:]:
-            activity_lines.append(f"[bold]{self._escape(item['message'])}[/bold]")
-            if item["reason"]:
-                activity_lines.append(f"[dim]Why: {self._escape(item['reason'])}[/dim]")
-        activity_panel = Panel("\n".join(activity_lines) or "Waiting for task activity", title="Live activity timeline", border_style="green")
-        sections = [header, current, workflow_panel, activity_panel]
-        if self.workers:
-            sections.append(self._render_workers())
-        sections.extend([self._render_files(), self._render_verification()])
-        if self.show_technical:
-            technical = "\n".join(self._escape(line) for line in self.technical_log[-8:]) or "No technical events yet."
-            sections.append(Panel(technical, title="Technical details", border_style="white"))
+        project = os.path.basename(os.path.normpath(self.workspace)) or self.workspace
+        header = Text.assemble(("LOCAL CODEX", "bold cyan"),
+                               (f"  {self.provider} / {self.model}  {self.execution_mode}", ""),
+                               (f"  {project}: {self.workspace}", "dim"))
+        rows = Table.grid(padding=(0, 1))
+        rows.add_column(width=3)
+        rows.add_column()
+        for label, state in self._checklist():
+            mark = "✓" if state == "done" else "!" if state == "failed" else "·" if state == "active" else "○"
+            rows.add_row(mark, label)
+        body = Group(Text(self.activity, style="bold white"), Text(f"Phase: {self.phase}", style="dim"), rows,
+                     Text(f"Result: {self._result_label()}", style="bold"))
+        if self.last_error:
+            body = Group(body, Text(f"Issue / recovery: {self.last_error[:180]}", style="yellow"))
+        sections = [header, Panel(body, title="Build", border_style="cyan")]
+        if self.show_technical and self.technical_log:
+            sections.append(Panel("\n".join(self._escape(line) for line in self.technical_log[-6:]),
+                                  title="Debug log", border_style="white"))
         return Group(*sections)
 
-    def _render_workers(self):
-        cards = []
-        for worker_id, item in list(self.workers.items())[-6:]:
-            elapsed = item["duration"]
-            if elapsed is None and item["started_at"] is not None and item["status"] == "RUNNING":
-                elapsed = max(0, time.monotonic() - item["started_at"])
-            elapsed_text = self._duration(elapsed) if elapsed is not None else "not started"
-            kind = "Parallel LLM task" if item["worker_type"] == "llm" else "Concurrent tool operation"
-            cards.append(Panel(
-                f"{kind} · {item['status']} · {elapsed_text}\nTask: {item['task'] or 'Not provided'}\n"
-                f"Action: {self._tool_friendly_name(item['action'] or item['operation']) if item['worker_type'] == 'tool' else item['action'] or 'Not reported'}\n"
-                f"Result: {item['summary'] or 'No result reported yet'}\n"
-                f"Dependencies: {', '.join(map(str, item['dependencies'])) or 'None reported'}"
-                + (f"\nBlocked: {item['blocked_reason']}" if item["blocked_reason"] else ""),
-                title=f"Worker {worker_id}", border_style="yellow",
-            ))
-        return Panel(Group(*cards), title="Parallel workers", border_style="yellow")
+    def _checklist(self):
+        changed = [item for item in self.files.values() if any(action in {"created", "modified", "modified via command", "deleted"} for action in item["actions"])]
+        folder = bool(self.created_folders) or any(
+            "/" in path and item.get("action") in {"created", "modified"} for path, item in self.files.items())
+        tests = [item for item in self.commands if any(word in item["command"].lower() for word in ("pytest", "unittest", "test"))]
+        test_state = {"passed": "done", "failed": "failed"}.get(tests[-1]["status"], "pending") if tests else "pending"
+        impl_state = "done" if changed and self.verification_status == "Verified" else "active" if changed else "pending"
+        verify_state = "done" if self.verification_status == "Verified" else "failed" if self.verification_status in {"Failed", "Blocked"} else "pending"
+        return [("Project folder: created" if folder else "Project folder: not reported", "done" if folder else "pending"),
+                (f"Files changed: {len(changed)}", "done" if changed else "pending"),
+                ("Implementation", impl_state), (f"Testing: {'passed' if test_state == 'done' else 'failed' if test_state == 'failed' else 'not run'}", test_state),
+                (f"Verification: {self.verification_status}", verify_state)]
 
-    def _render_files(self):
-        table = Table(show_header=True, header_style="bold")
-        for name in ("File", "Change", "Summary", "Lines", "+ / −"):
-            table.add_column(name, overflow="fold")
-        changed = [(path, item) for path, item in self.files.items()
-                   if any(action in {"created", "modified", "modified via command", "deleted"} for action in item["actions"])]
-        for path, item in changed[-8:]:
-            added = "?" if item["added"] is None else str(item["added"])
-            removed = "?" if item["removed"] is None else str(item["removed"])
-            lines = "?" if item["lines"] is None else str(item["lines"])
-            change = next(action for action in reversed(item["actions"])
-                          if action in {"created", "modified", "modified via command", "deleted"})
-            table.add_row(path, change, self._file_summary(change), lines, f"+{added} / −{removed}")
-        content = table if changed else "No file changes reported yet."
-        return Panel(content, title="Files changed", border_style="blue")
-
-    def _render_verification(self):
-        lines = [f"Final result: {self.verification_status}", f"GUI / app smoke test: {self.gui_status}"]
-        test_commands = [item for item in self.commands if any(word in item["command"].lower() for word in ("test", "pytest", "unittest"))]
-        if not test_commands:
-            lines.append("Tests: Not run / no test command reported")
-        if self.commands:
-            for item in self.commands[-5:]:
-                test_counts = item.get("test_counts", {})
-                counts = ""
-                if test_counts.get("discovered") is not None:
-                    counts = f" · tests: {test_counts.get('passed', 0)} passed, {test_counts.get('failed', 0)} failed"
-                elif any(word in item["command"].lower() for word in ("test", "pytest", "unittest")):
-                    counts = " · test counts: not reported"
-                lines.append(f"[{item['status']}] {item['command']} (exit {item.get('return_code', 'unknown')}){counts}")
-        else:
-            lines.append("Commands: Not run or not reported")
-        if self.verification:
-            lines.extend(f"Check: {item['message']}" for item in self.verification[-4:])
-        else:
-            lines.append("File checks: Not reported")
-        if self.unresolved_issues:
-            lines.extend(f"Open issue: {issue}" for issue in self.unresolved_issues[:4])
-        else:
-            lines.append("Unresolved issues: None reported")
-        return Panel("\n".join(lines), title="Verification", border_style="green" if self.verification_status == "Verified" else "red")
+    def _result_label(self):
+        if self.verification_status == "Verified": return "Completed and verified"
+        if self.verification_status == "Blocked": return "Blocked"
+        if self.verification_status == "Failed": return "Failed"
+        if self.task_status.startswith("Finished"): return "Completed with warnings"
+        return "In progress" if self.started_at else "Ready"
 
     def _plain_summary(self):
-        elapsed = self._duration(max(0, time.monotonic() - self.started_at)) if self.started_at else "unknown"
-        lines = ["\nTask result", f"Status: {self.task_status} - {self.verification_status}", f"Duration: {elapsed}", "Files changed:"]
-        changed_files = [(path, item) for path, item in self.files.items()
-                         if any(action in {"created", "modified", "modified via command", "deleted"} for action in item["actions"])]
-        if not changed_files:
-            lines.append("  None reported")
-        for path, item in changed_files:
-            added = "?" if item["added"] is None else str(item["added"])
-            removed = "?" if item["removed"] is None else str(item["removed"])
-            change = next(action for action in reversed(item["actions"])
-                          if action in {"created", "modified", "modified via command", "deleted"})
-            lines.append(f"  {path}: {change}, +{added}/-{removed} lines")
-        lines.append("Commands: " + ("; ".join(f"{item['status']}: {item['command']}" for item in self.commands) if self.commands else "Not run or not reported"))
-        test_commands = [item for item in self.commands if any(word in item["command"].lower() for word in ("test", "pytest", "unittest"))]
-        if not test_commands:
-            lines.append("Tests: Not run / no test command reported")
-        else:
-            for item in test_commands:
-                counts = item.get("test_counts", {})
-                if counts.get("discovered") is None:
-                    lines.append(f"Tests: {item['status']} - test counts not reported ({item['command']})")
-                else:
-                    lines.append(f"Tests: {counts.get('passed', 0)} passed, {counts.get('failed', 0)} failed ({item['command']})")
-        lines.append(f"GUI / app smoke test: {self.gui_status}")
-        lines.append("Verification checks: " + ("; ".join(item["message"] for item in self.verification) if self.verification else "Not reported"))
-        lines.append("Unresolved issues: " + ("; ".join(self.unresolved_issues) if self.unresolved_issues else "None reported"))
+        changed = sum(any(action in {"created", "modified", "modified via command", "deleted"}
+                          for action in item["actions"]) for item in self.files.values())
+        tests = next((label.split(": ", 1)[1] for label, _ in self._checklist()
+                      if label.startswith("Testing:")), "not run")
+        lines = [f"Result: {self._result_label()} ({self.verification_status})",
+                 f"Files changed: {changed}", f"Tests: {tests}"]
+        if self.last_error:
+            lines.append(f"Issue / recovery: {self.last_error[:180]}")
+        elif self.unresolved_issues:
+            lines.append(f"Issue: {self.unresolved_issues[0]}")
         if self.show_technical and self.technical_log:
-            lines.append("Technical details:")
-            lines.extend(f"  {line}" for line in self.technical_log[-8:])
+            lines.append("Debug: " + self.technical_log[-1])
         return "\n".join(lines)
 
     def _say(self, english, hinglish):
@@ -605,7 +546,9 @@ class TerminalDashboard:
 
     @staticmethod
     def _verification_label(value):
-        return {"PASS": "Verified", "READ ONLY": "Answer only - no changes verified"}.get(str(value).upper(), "Not verified")
+        return {"PASS": "Verified", "READ ONLY": "Answer only - no changes verified",
+                "PARTIAL": "Warnings", "FAIL": "Failed", "FAILED": "Failed",
+                "BLOCKED": "Blocked"}.get(str(value).upper(), "Not verified")
 
     @staticmethod
     def _looks_like_gui_smoke(command):

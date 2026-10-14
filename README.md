@@ -19,17 +19,17 @@ A terminal-based AI coding assistant that can inspect, create, edit, and debug f
    cd localcodex
    ```
 
-2. Create and activate a virtual environment:
+2. Create a virtual environment:
 
    ```powershell
    py -m venv .venv
-   .\.venv\Scripts\Activate.ps1
    ```
 
 3. Install Python dependencies:
 
    ```powershell
-   py -m pip install -r requirements.txt
+   .\.venv\Scripts\python.exe -m pip install --upgrade pip
+   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
    ```
 
 4. Configure NVIDIA API (optional, for online mode):
@@ -54,57 +54,59 @@ A terminal-based AI coding assistant that can inspect, create, edit, and debug f
    ollama pull qwen2.5-coder:3b
    ```
 
-   The checked-in config uses `execution_mode: "offline"`, provider `ollama`, and default model `qwen2.5-coder:3b`. Start with `py main.py` from the folder you want the agent to modify. Startup lists installed local models. To use a hosted provider, change `execution_mode` to `online` in `config/config.json` and set its key in the project `.env`. `.env` is loaded from the repository even when launched in another workspace, and the current directory remains the task workspace. Local models must be installed; before each task the CLI checks that the selected model is available. `auto` uses the configured provider without silent provider switching.
+   The checked-in config uses `execution_mode: "offline"`, provider `ollama`, and default model `qwen2.5-coder:3b`. Start with the repository launcher (or the `codex` command setup below) from the folder you want the agent to modify. Startup lists installed local models. To use a hosted provider, change `execution_mode` to `online` in `config/config.json` and set its key in the project `.env`. `.env` is loaded from the repository even when launched in another workspace, and the current directory remains the task workspace. Local models must be installed; before each task the CLI checks that the selected model is available. `auto` uses the configured provider without silent provider switching.
 
    Local mode uses plain JSON actions, readable tool feedback, duplicate-action protection, missing-deliverable checks, and retries when the model tries to finish too early. If the model repeats the same tool action three times while requested files are still missing, Local Codex switches to a constrained no-tools file-generation recovery, accepts only explicitly requested file paths, writes the files itself, and runs the most relevant available check. Hinglish folder/file requests like asking to create codex_smoke_test and put main.py inside it are included in missing-deliverable detection. After every successful source-file write/edit, Local Codex reads the file back and performs supported static checks (Python syntax, JSON syntax, and JavaScript syntax when Node.js is installed). It also records executed commands and only counts recognized test/build/lint/syntax commands as validation; a command such as `python -m pip --version` is not considered a code test. The final response includes changed files, automatic checks, commands and return codes, and an honest verification status. Static syntax checks do not replace relevant tests or real end-to-end testing, and a small model can still have capability limits.
 
-   Coding sessions use the event-driven student-demo dashboard. It shows the request, current phase, real workflow events, actual parallel read workers, changed files, executed checks and honest verification state. Internal step counters are omitted. Set `dashboard_demo_mode` to `false` to disable beginner-friendly phrasing; set `dashboard_language` to `"hinglish"` for Hinglish activity descriptions; set `dashboard_show_technical` to `true` for a compact technical event log. `ui_mode` remains `auto` (Rich on an interactive terminal, plain text otherwise), `rich`, or `plain`; non-interactive output uses readable plain text. Independent read-only tool calls can run concurrently; file edits and commands stay ordered. `max_parallel_tool_workers` bounds ordinary read operations (default 2); `max_concurrent_llm_requests` bounds model calls (default 1). A single Ollama generation is not made faster by adding threads. Task, model-request and tool-operation durations are recorded in the final report.
+   Coding sessions use a compact event-driven terminal dashboard: provider/model/workspace header, one live status line, a short build checklist, and a concise result. Status and checklist changes come from real tool, file, test, and task events; no fixed percentages or worker cards are shown. Set `dashboard_demo_mode` to `false` to disable beginner-friendly phrasing; set `dashboard_language` to `"hinglish"` for Hinglish status text; set `dashboard_show_technical` to `true` for a compact technical event log. `ui_mode` remains `auto` (Rich on an interactive terminal, plain text otherwise), `rich`, or `plain`; non-interactive output uses readable plain text. Independent read-only tool calls can run concurrently; file edits and commands stay ordered. `max_parallel_tool_workers` bounds ordinary read operations (default 2); `max_concurrent_llm_requests` bounds concurrent model calls (default 1); `max_total_workers` caps the combined configured worker pools (default 3). A single Ollama generation is not made faster by adding threads. Task, model-request and tool-operation durations are recorded in the final report. The default combined worker-pool cap is 3, local model concurrency stays at 1, the task deadline is 300 seconds, and workspace context is bounded to 6,500 characters plus 1,200 characters of memory; adjust `max_total_workers`, `task_deadline_seconds`, `workspace_context_chars`, and `workspace_memory_context_chars` in `config/config.json` as needed.
 
-   Before each planning or coding request, Local Codex builds a compact context from the active workspace: ignored-file-aware inventory, manifests, README, entry points, test files, relevant source excerpts and Python definitions. It refreshes that context after edits and commands, carries the previous execution report into follow-up debugging, and routes explicit explanation-only requests through a no-tools path. Start Local Codex from the project directory you want it to inspect.
+   Before each planning or coding request, Local Codex builds a compact context from the active workspace: ignored-file-aware inventory, manifests, README, entry points, test files, relevant source excerpts and Python definitions. It caches unchanged context and refreshes it after edits and commands, carries the previous execution report into follow-up debugging, and routes explicit explanation-only requests through a no-tools path. Start Local Codex from the project directory you want it to inspect.
 
    Install development test tools and run the full suite:
 
    ```powershell
-   py -m pip install -r requirements-dev.txt
-   py -m pytest -q
+   .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+   .\.venv\Scripts\python.exe -m pytest -q
    ```
 
-   An optional local latency comparison is available with `py -m tools.benchmark_ollama`. It runs two equivalent sequential requests against the configured installed Ollama model. Add `--include-parallel` to opt into two concurrent generations; this can exhaust RAM on an 8 GB CPU-only machine. The benchmark measures response latency and failures only, not coding completion or test quality. No benchmark is run automatically.
+   An optional local latency comparison is available with `.\.venv\Scripts\python.exe -m tools.benchmark_ollama`. It runs two equivalent sequential requests against the configured installed Ollama model. Add `--include-parallel` to opt into two concurrent generations; this can exhaust RAM on an 8 GB CPU-only machine. The benchmark measures response latency and failures only, not coding completion or test quality. No benchmark is run automatically.
 
-6. Start Local Codex from the directory you want it to work in:
+6. Start Local Codex while keeping the current directory as the workspace:
 
    ```powershell
-   py F:\projects\local-codex\main.py
+   $codexRepo = (Resolve-Path "$env:USERPROFILE\src\localcodex").Path
+   python "$codexRepo\main.py"
    ```
 
-   Replace that path with the actual location where you cloned this repository. The current working directory becomes the agent's workspace.
+   Replace the example clone directory with your actual repository location. The portable launcher uses the repository's `.venv` Python directly when it exists; activation is not required.
 
 ### Open Local Codex by typing `codex` in the terminal
 
-The repository includes `codex.bat`, a Windows launcher. Add the folder containing
-`codex.bat` (the cloned `localcodex` folder) to your **user Path**:
+The repository includes a portable `codex.bat`. To make `codex` available globally without committing a machine-specific path, create a user-local shim pointing to your clone:
 
-1. Open Windows **Edit environment variables for your account**.
-2. Under **User variables**, select **Path** → **Edit** → **New**.
-3. Add the full path to the cloned repository, for example
-   `F:\projects\local-codex`, then save the dialogs.
-4. Close and reopen Command Prompt or PowerShell so it reloads Path.
-5. Change to the project you want Local Codex to work on, then run:
+1. In PowerShell, set the actual directory where you cloned this repository:
 
    ```powershell
-   cd F:\projects\app\assignment
+   $repo = (Resolve-Path "C:\path\to\your\localcodex").Path
+   $bin = Join-Path $env:USERPROFILE "bin"
+   New-Item -ItemType Directory -Force -Path $bin | Out-Null
+   "@echo off`r`ncall `"$repo\codex.bat`" %*`r`n" | Set-Content -Encoding ascii (Join-Path $bin "codex.cmd")
+   ```
+
+2. Add `$bin` (normally `%USERPROFILE%\bin`) to your **user Path** using Windows **Edit environment variables for your account** > **Path** > **New**. This adds one entry and leaves existing entries untouched.
+3. Close and reopen Command Prompt or PowerShell.
+4. Change to the project you want Codex to work on, then run:
+
+   ```powershell
+   cd C:\path\to\your\project
    codex
    ```
 
-The launcher starts this repository's `main.py` while keeping the current folder
-as the agent's workspace. Keep the virtual environment from step 2 activated
-when using `codex`, or install the requirements into the Python environment
-used by the `python` command. Ollama and the selected model must also be
-installed for the default offline configuration.
+The shim calls the clone's launcher. It resolves `main.py` relative to the launcher, uses the repository `.venv` Python when available, and otherwise tries the Windows `py -3` launcher or `python` on `PATH`. The current folder becomes the coding workspace. Optionally set `LOCAL_CODEX_WORKSPACE` to an explicit workspace directory before launching. Ollama and the configured model must be installed for the default offline mode.
 
 ## Usage
 
-Start from PowerShell with `py F:\projects\local-codex\main.py` (or run `python main.py` from the repository). Startup lists the four configured provider/model choices and lets you reuse the local default. NVIDIA/Groq require explicit confirmation before leaving offline mode. Example:
+Start from PowerShell with `python "<clone-directory>\main.py"` or type `codex` after installing the user-local shim above. Startup lists the four configured provider/model choices and lets you reuse the local default. NVIDIA/Groq require explicit confirmation before leaving offline mode. Example:
 
 ```text
 Create a Python calculator in calculator.py with addition, subtraction, multiplication, division, clear, and backspace.

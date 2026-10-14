@@ -20,7 +20,10 @@
     },
     "max_parallel_tool_workers": 2,
     "max_concurrent_llm_requests": 1,
+    "max_total_workers": 3,
     "max_agent_steps": 32,
+    "task_deadline_seconds": 300,
+    "workspace_context_chars": 6500,
     "temperature": 0.1,
     "max_tokens": 8192,
     "retry": {
@@ -43,5 +46,5 @@
     "persistent_memory_enabled": true,
     "training_data_collection_enabled": true,
     "workspace_memory_dir": ".localcodex/memory",
-    "workspace_memory_context_chars": 4200
+    "workspace_memory_context_chars": 1200
 }
