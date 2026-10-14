@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from agent.groq import GroqClient
 from agent.context import WorkspaceContextManager
 from agent.game_recovery import car_game_files, supports_car_game_recovery
+from agent.calculator_recovery import calculator_files, supports_calculator_gui
 from agent.nvidia import NvidiaClient
 from agent.ollama import OllamaClient
 from agent.orchestration import completeness_issues, fallback_specification, parse_specification, redact_secrets
@@ -595,6 +596,74 @@ class MultiModelAgent:
             "The NVIDIA request failed. The local recovery wrote files, but verification failed; the task is not complete."
         )
         return result
+
+    def _recover_calculator_gui_task(self, task):
+        """Implement common arithmetic GUI requests without burning small-model tool steps."""
+        report = self.last_task_report
+        report.update({
+            "task": task,
+            "changed_files": [],
+            "commands": [],
+            "static_checks": [],
+            "specification": None,
+            "architect": {"provider": "none", "model": "none", "status": "SKIPPED (deterministic calculator task)"},
+            "coder": {"provider": "local recovery", "model": "Python standard library"},
+            "implementation_source": "deterministic Tkinter calculator recovery",
+        })
+        self.show_status("Building the requested calculator with a standard-library recovery")
+        files = calculator_files()
+        for path, content in files.items():
+            written = self.execute_tool("write_file", {"path": path, "content": content})
+            if not isinstance(written, dict) or written.get("success") is not True:
+                report["initial_error"] = f"Could not write {path}: " + str(
+                    written.get("error", "unknown file tool error") if isinstance(written, dict) else written
+                )
+                report["verification_status"] = "FAIL"
+                return self._format_final_report("Calculator recovery failed while writing source files.")
+            if path not in report["changed_files"]:
+                report["changed_files"].append(path)
+            report["static_checks"].append(verify_changed_file(self.workspace, path))
+
+        commands = [
+            f'"{sys.executable}" -m py_compile calculator.py calculator_gui.py test_calculator.py',
+            f'"{sys.executable}" -m unittest -v test_calculator',
+        ]
+        for command in commands:
+            outcome = self.execute_tool("run_command", {"command": command})
+            outcome = outcome if isinstance(outcome, dict) else {"success": False, "stderr": str(outcome)}
+            record = {
+                "command": command,
+                "cwd": outcome.get("cwd", self.workspace),
+                "duration_seconds": outcome.get("duration_seconds"),
+                "timed_out": outcome.get("timed_out", False),
+                "return_code": outcome.get("return_code"),
+                "success": outcome.get("success") is True and outcome.get("return_code") == 0,
+                "stdout": outcome.get("stdout", ""),
+                "stderr": outcome.get("stderr", ""),
+                "meaningful_check": True,
+            }
+            record["test_counts"] = _test_counts(command, record["stdout"], record["stderr"])
+            record["executed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            report["commands"].append(record)
+            self.emit_event("verification", message=f"{command} — {'PASS' if record['success'] else 'FAIL'}")
+
+        checks_pass = all(item.get("success") for item in report["static_checks"])
+        command_pass = bool(report["commands"]) and all(
+            item.get("success") and item.get("return_code") == 0 for item in report["commands"]
+        )
+        report["verification_status"] = "PASS" if checks_pass and command_pass else "PARTIAL"
+        if not command_pass:
+            report["initial_error"] = (
+                "The calculator source was generated, but one or more local verification commands failed. "
+                "Review the exact command output below; no external package is required for arithmetic tests."
+            )
+        summary = (
+            "Created a working Tkinter calculator with addition, subtraction, multiplication, division, "
+            "input validation, clear button, and standard-library unit tests."
+            if report["verification_status"] == "PASS" else
+            "Created the calculator files, but verification did not fully pass; see the recorded command output."
+        )
+        return self._format_final_report(summary)
 
     def _generate_missing_files_locally(self, client, task_context, expected_paths):
         """Escape a stuck tool loop by asking the local model for file contents without tools."""
