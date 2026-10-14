@@ -87,11 +87,11 @@ def test_ollama_discovery_falls_back_to_cli_when_api_returns_empty_list():
         returncode = 0
         stdout = "NAME ID SIZE MODIFIED\nqwen2.5-coder:3b f72c60 1.9 GB 4 days ago\n"
 
-    with patch("urllib.request.urlopen", return_value=EmptyResponse()), \\
-         patch("subprocess.run", return_value=Completed()):
-        assert discover_ollama_models("http://localhost:11434/v1", timeout=0.1) == [
-            "qwen2.5-coder:3b"
-        ]
+    with patch("urllib.request.urlopen", return_value=EmptyResponse()):
+        with patch("subprocess.run", return_value=Completed()):
+            assert discover_ollama_models("http://localhost:11434/v1", timeout=0.1) == [
+                "qwen2.5-coder:3b"
+            ]
 
 
 def test_offline_default_uses_discovered_model_even_if_startup_options_are_stale():
