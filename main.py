@@ -112,7 +112,11 @@ def choose_startup_model(config):
 
 
 def offer_provider_recovery(agent, config, task):
-    """Ask before retrying a failed model or explicitly choosing another provider."""
+    """Offer manual recovery only when automatic hybrid escalation is not in use."""
+    if config.get("execution_mode") == "hybrid":
+        # Hybrid mode already performs one bounded hosted repair attempt when enabled.
+        # Do not show a second interactive prompt that can accidentally consume the next task.
+        return None
     report = agent.last_task_report or {}
     failed_requests = [item for item in report.get("llm_requests", []) if not item.get("success")]
     if report.get("verification_status") == "PASS" or not failed_requests:
