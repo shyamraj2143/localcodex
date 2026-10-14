@@ -121,14 +121,20 @@ def choose_provider(config, input_fn=input, output=print, models=None):
             return None
         config["provider"] = selected_provider
         config["selected_model"] = selected_model
-        config["local_only"] = selected_provider == "ollama" and not _has_credential("GROQ_API_KEY")
-        config["hosted_api_enabled"] = True
+        # A local model selection must never depend on a hosted API key.
+        # Hosted providers are available only when the user explicitly selects
+        # one of the hosted menu entries; local runs are deterministic/local-only.
         if selected_provider == "ollama":
-            config["execution_mode"] = "hybrid"
+            config["execution_mode"] = "offline"
             config["local_model"] = selected_model
-            config["hosted_provider_preference"] = "groq"
-            config["architect_provider"] = "groq"
-            config["hosted_coder_escalation"] = True
+            config["local_only"] = True
+            config["hosted_api_enabled"] = False
+            config["task_architect_enabled"] = False
+            config["hosted_coder_escalation"] = False
+            config["provider_fallback_enabled"] = False
+        else:
+            config["local_only"] = False
+            config["hosted_api_enabled"] = True
         elif selected_provider == "nvidia":
             config["execution_mode"] = "online"
             config["nvidia_model"] = selected_model
