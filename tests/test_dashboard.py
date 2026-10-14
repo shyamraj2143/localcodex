@@ -232,16 +232,16 @@ def test_plain_live_status_flushes_before_model_wait():
     assert "choosing its next coding action" in output.getvalue()
 
 
-def test_hinglish_presentation_and_optional_technical_log():
+def test_english_presentation_and_optional_technical_log():
     output = io.StringIO()
-    dashboard = TerminalDashboard(mode="plain", workspace="workspace", language="hinglish",
+    dashboard = TerminalDashboard(mode="plain", workspace="workspace", language="english",
                                   show_technical=True, stream=output)
     dashboard.bus.emit("task.started", task="inspect files")
     dashboard.bus.emit("tool.started", tool="list_files")
     dashboard.bus.emit("tool.finished", tool="list_files", duration=0.12, success=True)
     dashboard.bus.emit("task.finished", status="NOT VERIFIED")
 
-    assert "Project ki files inspect kar raha hai" in output.getvalue()
+    assert "Looking through the project files" in output.getvalue()
     assert "Tool finished:" in output.getvalue()
     assert dashboard.verification_status == "Not verified"
 
