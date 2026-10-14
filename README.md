@@ -56,6 +56,13 @@ A terminal-based AI coding assistant that can inspect, create, edit, and debug f
 
    The checked-in config uses `execution_mode: "offline"`, provider `ollama`, and default model `qwen2.5-coder:3b`. Start with the repository launcher (or the `codex` command setup below) from the folder you want the agent to modify. Startup lists installed local models. To use a hosted provider, change `execution_mode` to `online` in `config/config.json` and set its key in the project `.env`. `.env` is loaded from the repository even when launched in another workspace, and the current directory remains the task workspace. Local models must be installed; before each task the CLI checks that the selected model is available. `auto` uses the configured provider without silent provider switching.
 
+   Optional local overrides may be placed in the untracked `.env` file:
+   `OLLAMA_HOST=http://localhost:11434` and
+   `OLLAMA_MODEL=qwen2.5-coder:3b`. If unset, the checked-in config defaults
+   are used. Model discovery checks the Ollama tags API and falls back to
+   `ollama list` when the API returns an empty model list. It never downloads
+   a model automatically.
+
    Local mode uses plain JSON actions, readable tool feedback, duplicate-action protection, missing-deliverable checks, and retries when the model tries to finish too early. If the model repeats the same tool action three times while requested files are still missing, Local Codex switches to a constrained no-tools file-generation recovery, accepts only explicitly requested file paths, writes the files itself, and runs the most relevant available check. Hinglish folder/file requests like asking to create codex_smoke_test and put main.py inside it are included in missing-deliverable detection. After every successful source-file write/edit, Local Codex reads the file back and performs supported static checks (Python syntax, JSON syntax, and JavaScript syntax when Node.js is installed). It also records executed commands and only counts recognized test/build/lint/syntax commands as validation; a command such as `python -m pip --version` is not considered a code test. The final response includes changed files, automatic checks, commands and return codes, and an honest verification status. Static syntax checks do not replace relevant tests or real end-to-end testing, and a small model can still have capability limits.
 
    Coding sessions use a compact event-driven terminal dashboard: provider/model/workspace header, one live status line, a short build checklist, and a concise result. Status and checklist changes come from real tool, file, test, and task events; no fixed percentages or worker cards are shown. Set `dashboard_demo_mode` to `false` to disable beginner-friendly phrasing; set `dashboard_language` to `"hinglish"` for Hinglish status text; set `dashboard_show_technical` to `true` for a compact technical event log. `ui_mode` remains `auto` (Rich on an interactive terminal, plain text otherwise), `rich`, or `plain`; non-interactive output uses readable plain text. Independent read-only tool calls can run concurrently; file edits and commands stay ordered. `max_parallel_tool_workers` bounds ordinary read operations (default 2); `max_concurrent_llm_requests` bounds concurrent model calls (default 1); `max_total_workers` caps the combined configured worker pools (default 3). A single Ollama generation is not made faster by adding threads. Task, model-request and tool-operation durations are recorded in the final report. The default combined worker-pool cap is 3, local model concurrency stays at 1, the task deadline is 300 seconds, and workspace context is bounded to 6,500 characters plus 1,200 characters of memory; adjust `max_total_workers`, `task_deadline_seconds`, `workspace_context_chars`, and `workspace_memory_context_chars` in `config/config.json` as needed.
@@ -244,3 +251,26 @@ Run the standard-library training data tests with
 `python -m unittest tests.test_training_data -v`. The existing test suite uses
 pytest; install the project's test dependency in a compatible environment to
 run it (pytest is not installed in the checked-in virtual environment).
+
+
+## Troubleshooting Windows and VS Code
+
+- If `codex` is not recognized, verify that the folder containing `codex.bat`
+  is discoverable through the user PATH, then open a new terminal. The portable
+  repository launcher itself uses paths relative to its own location; a
+  machine-specific global `codex.cmd` shim belongs in the user's home folder,
+  not in the repository.
+- If the installed Ollama model is reported missing, run `ollama list`, check
+  `OLLAMA_HOST` and `OLLAMA_MODEL` in the local `.env`, then restart Codex.
+  Never commit the real `.env` file.
+- If CMD displays an unexpected prompt such as `Enter char to delete up to:`,
+  press Ctrl+C once to stop the current interactive command. Open a new CMD
+  window and check whether the prompt recurs before running Codex. Do not delete
+  registry entries or startup scripts without identifying the source.
+- If Ctrl+clicking files in VS Code opens a blank editor/window showing only the
+  VS Code logo, this is usually a local VS Code/editor-state, extension, or
+  keybinding issue rather than a Python agent setting. First try opening the
+  file with a normal click, use `File > Open File...`, and run
+  `Developer: Reload Window` from the Command Palette. If it persists, test
+  with extensions disabled using `code --disable-extensions`. Repository
+  changes cannot repair a local VS Code profile or a global extension setting.
