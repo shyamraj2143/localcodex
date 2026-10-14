@@ -136,7 +136,11 @@ def test_hybrid_mode_shows_exactly_four_coding_choices_and_defaults_to_qwen():
     assert provider == "ollama"
     assert config["provider"] == "ollama"
     assert config["selected_model"] == "qwen2.5-coder:3b"
-    assert config["hosted_coder_escalation"] is True
+    assert config["execution_mode"] == "offline"
+    assert config["local_only"] is True
+    assert config["hosted_api_enabled"] is False
+    assert config["task_architect_enabled"] is False
+    assert config["hosted_coder_escalation"] is False
 
 
 def test_hybrid_model_menu_rejects_missing_local_deepseek_without_substitution():
