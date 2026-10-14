@@ -7,20 +7,45 @@ of an interactive coding agent.
 """
 
 import json
+import difflib
+from concurrent.futures import ThreadPoolExecutor, wait
+import threading
+from datetime import datetime, timezone
 import os
 import re
 import sys
+import time
 import uuid
 from types import SimpleNamespace
 
 from agent.groq import GroqClient
+from agent.context import WorkspaceContextManager
+from agent.game_recovery import car_game_files, supports_car_game_recovery
 from agent.nvidia import NvidiaClient
 from agent.ollama import OllamaClient
+from agent.orchestration import completeness_issues, fallback_specification, parse_specification, redact_secrets
+from agent.provider_support import safe_error
+from agent.request import classify_request, references_existing_context
 from agent.verification import verify_changed_file
+from agent.workspace_memory import WorkspaceMemory
 
 
 MAX_TOOL_RESULT_CHARS = 16000
 MAX_SESSION_TURNS = 8
+MAX_COMMAND_LINE_COUNT_FILE_BYTES = 512_000
+MAX_COMMAND_LINE_COUNT_SCAN_BYTES = 8_000_000
+
+
+def _dashboard_line_delta(before, after):
+    added = removed = 0
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
+        a=before.splitlines(), b=after.splitlines(), autojunk=False
+    ).get_opcodes():
+        if tag in {"insert", "replace"}:
+            added += j2 - j1
+        if tag in {"delete", "replace"}:
+            removed += i2 - i1
+    return added, removed
 
 
 def _iter_json_objects(content):
@@ -140,6 +165,43 @@ def _is_meaningful_verification_command(command):
     return any(re.search(pattern, command) for pattern in patterns)
 
 
+def _test_run_executed(record):
+    """A zero exit code is not enough if a test runner discovered no tests."""
+    if not record.get("success") or record.get("return_code") != 0:
+        return False
+    command = str(record.get("command", "")).lower()
+    output = (str(record.get("stdout", "")) + "\n" + str(record.get("stderr", ""))).lower()
+    if re.search(r"\b(?:pytest|unittest)\b", command):
+        return bool(re.search(r"\bran\s+[1-9]\d*\s+tests?\b", output) or re.search(r"[1-9]\d*\s+passed\b", output))
+    if re.search(r"\bnpm\s+(?:test|run\s+test)\b", command):
+        return bool(re.search(r"\b[1-9]\d*\s+(?:passing|passed|tests? passed)\b", output))
+    return False
+
+
+def _test_counts(command, stdout="", stderr=""):
+    """Extract only counts actually printed by recognizable test runners."""
+    output = str(stdout or "") + "\n" + str(stderr or "")
+    command = str(command or "").lower()
+    counts = {"discovered": None, "passed": None, "failed": None}
+    if re.search(r"\bpytest\b", command):
+        passed = re.search(r"(\d+)\s+passed\b", output)
+        failed = re.search(r"(\d+)\s+failed\b", output)
+        errors = re.search(r"(\d+)\s+error(?:s)?\b", output)
+        if passed or failed or errors:
+            counts["passed"] = int(passed.group(1)) if passed else 0
+            counts["failed"] = (int(failed.group(1)) if failed else 0) + (int(errors.group(1)) if errors else 0)
+            counts["discovered"] = counts["passed"] + counts["failed"]
+    elif re.search(r"\b(?:unittest|discover)\b", command):
+        ran = re.search(r"Ran\s+(\d+)\s+tests?\b", output, re.I)
+        failures = re.search(r"failures=(\d+)", output, re.I)
+        errors = re.search(r"errors=(\d+)", output, re.I)
+        if ran:
+            counts["discovered"] = int(ran.group(1))
+            counts["failed"] = (int(failures.group(1)) if failures else 0) + (int(errors.group(1)) if errors else 0)
+            counts["passed"] = max(0, counts["discovered"] - counts["failed"])
+    return counts
+
+
 def _expected_artifact_paths(task):
     """Infer explicit file/folder deliverables so premature 'done' is caught."""
     if not isinstance(task, str):
@@ -216,17 +278,76 @@ def _expected_artifact_paths(task):
 class MultiModelAgent:
     """A single-agent, tool-driven coding loop with persistent short history."""
 
-    def __init__(self, config, tools, tool_schemas, workspace, status=None):
+    def __init__(self, config, tools, tool_schemas, workspace, status=None, event_bus=None):
         self.config = config
+        if self.config.get("execution_mode") == "offline":
+            self.config.update(provider="ollama", local_only=True, hosted_api_enabled=False,
+                               hosted_coder_escalation=False, provider_fallback_enabled=False)
         self.tools = tools
         self.tool_schemas = tool_schemas
         self.workspace = workspace
         self.status_callback = status
+        self.event_bus = event_bus
         self.models = config.get("models", {})
-        self.max_workers = max(1, min(int(config.get("max_parallel_workers", 1)), 4))
-        self.max_steps = max(1, min(int(config.get("max_agent_steps", 20)), 40))
+        self.max_workers = max(1, min(int(config.get("max_parallel_tool_workers", config.get("max_parallel_workers", 2))), 4))
+        self.max_concurrent_llm_requests = max(1, min(int(config.get("max_concurrent_llm_requests", 1)), 2))
+        self._llm_semaphore = threading.BoundedSemaphore(self.max_concurrent_llm_requests)
+        self.max_steps = max(1, min(int(config.get("max_agent_steps", 32)), 80))
         self.session_history = []
         self.last_task_report = {}
+        self._terminal_file_state = None
+        self.workspace_context = WorkspaceContextManager(workspace)
+        memory_config = dict(config)
+        memory_config.setdefault("persistent_memory_enabled", False)
+        self.workspace_memory = WorkspaceMemory(workspace, self.workspace_context, memory_config)
+        self.recent_tool_calls = []
+        self.task_tool_events = []
+        self.current_plan = []
+        self.current_task_id = None
+
+    def _record_tool_outcome(self, name, arguments, result):
+        safe_arguments = {
+            key: value for key, value in arguments.items()
+            if key not in {"content", "old_text", "new_text"}
+        }
+        if "content" in arguments:
+            safe_arguments["content_chars"] = len(str(arguments["content"]))
+        if "old_text" in arguments or "new_text" in arguments:
+            safe_arguments["edit_chars"] = {
+                "old": len(str(arguments.get("old_text", ""))),
+                "new": len(str(arguments.get("new_text", ""))),
+            }
+        if isinstance(result, dict):
+            safe_result = {
+                key: result.get(key) for key in (
+                    "success", "error", "operation", "path", "return_code", "cwd",
+                    "duration_seconds", "timed_out", "blocked", "file_state",
+                ) if key in result
+            }
+            for key in ("stdout", "stderr"):
+                if result.get(key):
+                    safe_result[key] = str(result[key])[-1000:]
+        else:
+            safe_result = {"success": True, "lines": len(str(result).splitlines())} if isinstance(result, str) else {"success": True}
+        record = {"tool": name, "arguments": safe_arguments, "result": safe_result}
+        serialized = redact_secrets(json.dumps(record, ensure_ascii=False, default=str))
+        self.recent_tool_calls.append(json.loads(serialized))
+        self.recent_tool_calls = self.recent_tool_calls[-12:]
+        training_record = json.loads(serialized)
+        for key in ("content", "old_text", "new_text"):
+            if key in arguments:
+                training_record["arguments"][key] = redact_secrets(str(arguments[key]))[:2400]
+        if isinstance(result, str):
+            training_record["result"] = {"success": True, "content": redact_secrets(result)[:2400]}
+        elif isinstance(result, dict) and isinstance(result.get("content"), str):
+            training_record["result"]["content"] = redact_secrets(result["content"])[:2400]
+        self.task_tool_events.append(training_record)
+        self.task_tool_events = self.task_tool_events[-200:]
+        if name in {"write_file", "edit_file"}:
+            self.workspace_context.invalidate([str(arguments.get("path", ""))])
+        elif name in {"create_folder", "run_command"}:
+            self.workspace_context.invalidate()
+        return result
 
     def _format_final_report(self, summary):
         """Append a factual execution report based only on recorded tool results."""
@@ -237,6 +358,22 @@ class MultiModelAgent:
 
         lines = [str(summary or "").strip(), "", "Execution report:"]
         lines.append("Files changed: " + (", ".join(changed) if changed else "none recorded"))
+        requests = report.get("llm_requests", [])
+        attempts = report.get("llm_attempts", requests)
+        tool_operations = report.get("tool_durations", [])
+        lines.append(
+            f"Execution counters: LLM calls {len(requests)}; provider request attempts {len(attempts)} "
+            f"({sum(bool(item.get('success')) for item in attempts)} passed, "
+            f"{sum(item.get('success') is False for item in attempts)} failed); "
+            f"logical call results "
+            f"({sum(bool(item.get('success')) for item in requests)} passed, "
+            f"{sum(not item.get('success') for item in requests)} failed); "
+            f"tool operations {len(tool_operations)} "
+            f"({sum(bool(item.get('success')) for item in tool_operations)} passed, "
+            f"{sum(not item.get('success') for item in tool_operations)} failed)."
+        )
+        if report.get("implementation_source"):
+            lines.append("Implementation source: " + report["implementation_source"])
 
         latest_checks = {}
         for item in checks:
@@ -253,10 +390,19 @@ class MultiModelAgent:
             for item in commands[-8:]:
                 state = "PASS" if item.get("success") and item.get("return_code") == 0 else "FAIL"
                 lines.append(f"- {state} [{item.get('return_code', 'unknown')}] {item.get('command', '')}")
-                output = (str(item.get("stdout", "")) + "\\n" + str(item.get("stderr", ""))).strip()
+                output = (str(item.get("stdout", "")) + "\n" + str(item.get("stderr", ""))).strip()
                 if output:
-                    compact_output = output[-1200:].replace("\\n", " | ")
+                    compact_output = output[-1200:].replace("\n", " | ")
                     lines.append(f"  Actual output: {compact_output}")
+                if item.get("duration_seconds") is not None:
+                    lines.append(f"  Duration: {item['duration_seconds']:.2f}s; working directory: {item.get('cwd', self.workspace)}")
+                if item.get("timed_out"):
+                    lines.append("  Command terminated on timeout.")
+                test_counts = item.get("test_counts", {})
+                if test_counts.get("discovered") is not None:
+                    lines.append(
+                        f"  Tests: discovered {test_counts['discovered']}, passed {test_counts['passed']}, failed {test_counts['failed']}"
+                    )
 
         meaningful = [item for item in commands if item.get("meaningful_check")]
         latest_meaningful_pass = bool(
@@ -265,7 +411,10 @@ class MultiModelAgent:
         )
         static_pass = all(item.get("success") for item in latest_checks.values())
         missing_artifacts = self._missing_expected_artifacts(report.get("task", ""))
-        if changed and latest_meaningful_pass and static_pass and not missing_artifacts:
+        report["missing_artifacts"] = missing_artifacts
+        spec_issues = self._task_completeness_issues() if report.get("specification") else []
+        report["completeness_issues"] = spec_issues
+        if changed and latest_meaningful_pass and static_pass and not missing_artifacts and not spec_issues:
             lines.append("Verification status: PASS — automatic file checks and the latest relevant test/check command passed.")
         elif changed:
             reasons = []
@@ -281,13 +430,54 @@ class MultiModelAgent:
                 lines.append("Verification status: FAIL — requested deliverables are missing: " + ", ".join(missing_artifacts) + ".")
             else:
                 lines.append("Verification status: no file modifications were recorded; review the task summary above.")
-        return "\n".join(line for line in lines if line is not None)
+        if changed and latest_meaningful_pass and static_pass and not missing_artifacts and not spec_issues:
+            report["verification_status"] = "PASS"
+        elif changed:
+            report["verification_status"] = "PARTIAL"
+        elif missing_artifacts:
+            report["verification_status"] = "FAIL"
+        else:
+            report["verification_status"] = "NOT VERIFIED"
+        if report.get("architect"):
+            item = report["architect"]
+            lines.append(f"Architect: {item.get('provider', 'none')} / {item.get('model', 'none')} ({item.get('status', 'unknown')}).")
+            if item.get("usage"):
+                lines.append("Architect usage: " + json.dumps(item["usage"], ensure_ascii=False))
+            if item.get("error"):
+                lines.append("Architect failure detail: " + redact_secrets(str(item["error"]))[:900])
+        if report.get("coder"):
+            item = report["coder"]
+            lines.append(f"Coder: {item.get('provider', 'unknown')} / {item.get('model', 'unknown')}.")
+        if report.get("escalations"):
+            lines.append(f"Hosted coder escalations: {len(report['escalations'])}.")
+            for item in report["escalations"]:
+                if item.get("error"):
+                    lines.append(f"- {item.get('provider', 'provider')} {item.get('status', 'FAILED')}: {redact_secrets(str(item['error']))[:900]}")
+        if report.get("initial_error"):
+            lines.append("Initial execution error: " + redact_secrets(str(report["initial_error"]))[:1200])
+        if report.get("usage"):
+            lines.append("Coder usage: " + json.dumps(report["usage"], ensure_ascii=False))
+        failed_requests = [item for item in report.get("llm_requests", []) if not item.get("success")]
+        for item in failed_requests[-5:]:
+            lines.append(
+                f"Model request failed: {item.get('provider', 'unknown')} / {item.get('model', 'unknown')} "
+                f"during {item.get('phase', 'task')} ({item.get('duration_seconds', 0):.1f}s): "
+                + redact_secrets(str(item.get("error", "No error detail returned.")))[:900]
+            )
+        lines.extend("- Acceptance check FAIL: " + issue for issue in spec_issues)
+        return redact_secrets("\n".join(line for line in lines if line is not None))
 
     def _missing_expected_artifacts(self, task_context):
         """Return explicitly requested relative paths that do not exist yet."""
         missing = []
         root = os.path.realpath(self.workspace)
-        for artifact in _expected_artifact_paths(task_context):
+        specification = (self.last_task_report or {}).get("specification") or {}
+        expected = [] if specification else list(_expected_artifact_paths(task_context))
+        for item in specification.get("expected_files", []):
+            path = item.get("path") if isinstance(item, dict) else None
+            if path and path not in expected:
+                expected.append(path)
+        for artifact in expected:
             full_path = os.path.realpath(os.path.join(root, artifact))
             try:
                 if os.path.commonpath([root, full_path]) != root:
@@ -297,6 +487,89 @@ class MultiModelAgent:
             if not os.path.exists(full_path):
                 missing.append(artifact)
         return missing
+
+    def _task_completeness_issues(self):
+        specification = (self.last_task_report or {}).get("specification")
+        if not specification:
+            return []
+        issues = completeness_issues(self.workspace, specification)
+        if specification.get("test_commands") and not any(
+            _test_run_executed(record) for record in self.last_task_report.get("commands", [])
+        ):
+            issues.append("Required automated tests were not confirmed as executed with at least one discovered test")
+        return issues
+
+    def _recover_car_game_after_provider_failure(self, task, specification, error):
+        """Build and verify a narrowly supported Tkinter car game through real tools."""
+        if not supports_car_game_recovery(task):
+            return None
+        required = {"main.py", "readme.md", "requirements.txt", "test_game_logic.py"}
+        specified = {
+            os.path.basename(item.get("path", "")).lower()
+            for item in (specification or {}).get("expected_files", [])
+            if isinstance(item, dict)
+        }
+        if not required.issubset(specified):
+            return None
+        if "write_file" not in self.tools or "run_command" not in self.tools:
+            return None
+
+        self.show_status("NVIDIA failed; creating the requested car game with the bounded local recovery")
+        self.emit_event("workflow.phase", phase="implementing", state="active",
+                        message="Writing a standard-library car game after the selected provider failed.")
+        report = self.last_task_report
+        report["implementation_source"] = "deterministic local car-game recovery after selected provider failure"
+        report["provider_failure"] = redact_secrets(str(error))[:1200]
+        report["recovery_status"] = "STARTED"
+        for path, content in car_game_files().items():
+            result = self.execute_tool("write_file", {"path": path, "content": content})
+            if not isinstance(result, dict) or result.get("success") is not True:
+                report["recovery_status"] = "FAILED"
+                report["initial_error"] = "Recovery could not write " + path + ": " + str(
+                    result.get("error", "unknown file-tool error") if isinstance(result, dict) else result
+                )
+                report["verification_status"] = "FAIL"
+                return self._format_final_report("The selected provider failed and the local game recovery could not write all files.")
+            if path not in report.setdefault("changed_files", []):
+                report["changed_files"].append(path)
+            report.setdefault("static_checks", []).append(verify_changed_file(self.workspace, path))
+
+        command_list = [
+            f'"{sys.executable}" -m py_compile main.py game_logic.py tests/test_game_logic.py',
+            f'"{sys.executable}" -m unittest discover -s tests -v',
+        ]
+        all_passed = True
+        for command in command_list:
+            result = self.execute_tool("run_command", {"command": command})
+            result = result if isinstance(result, dict) else {"success": False, "stderr": str(result)}
+            record = {
+                "command": command,
+                "cwd": result.get("cwd", self.workspace),
+                "duration_seconds": result.get("duration_seconds"),
+                "timed_out": result.get("timed_out", False),
+                "return_code": result.get("return_code"),
+                "success": result.get("success") is True and result.get("return_code") == 0,
+                "stdout": result.get("stdout", ""),
+                "stderr": result.get("stderr", ""),
+                "meaningful_check": True,
+            }
+            record["test_counts"] = _test_counts(command, record["stdout"], record["stderr"])
+            record["executed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            report.setdefault("commands", []).append(record)
+            if command.endswith("-v") or "unittest discover" in command:
+                report["test_results"] = record["test_counts"]
+            self.emit_event("verification", message=f"{command} — {'PASS' if record['success'] else 'FAIL'}")
+            all_passed = all_passed and record["success"]
+        report["recovery_status"] = "PASS" if all_passed else "FAILED"
+        report["verification_status"] = "PASS" if all_passed else "FAIL"
+        if not all_passed:
+            report["initial_error"] = "Local recovery files were written, but at least one verification command failed."
+        result = self._format_final_report(
+            "The NVIDIA request failed. A deterministic Tkinter car-game recovery created the implementation and ran its checks."
+            if all_passed else
+            "The NVIDIA request failed. The local recovery wrote files, but verification failed; the task is not complete."
+        )
+        return result
 
     def _generate_missing_files_locally(self, client, task_context, expected_paths):
         """Escape a stuck tool loop by asking the local model for file contents without tools."""
@@ -324,11 +597,13 @@ class MultiModelAgent:
                 "Every required path must have complete content. Do not return folder names as files.\n"
                 f"Workspace root: {self.workspace}\n"
                 f"Required file paths (use these exact keys): {json.dumps(file_paths, ensure_ascii=False)}\n"
-                f"Original task:\n{task_context}\n"
+                f"Current project context and prior tool outcomes:\n{self._workspace_context_text(task_context, previous_report=self.last_task_report, specification=(self.last_task_report or {}).get('specification'))}\n"
+                f"Original task:\n{redact_secrets(task_context)}\n"
                 + (f"Previous verification failure to fix:\n{last_error}\n" if last_error else "")
             )
             try:
-                response = client.chat(
+                response = self._chat_with_events(
+                    client,
                     [
                         {
                             "role": "system",
@@ -340,6 +615,7 @@ class MultiModelAgent:
                         {"role": "user", "content": prompt},
                     ],
                     tools=None,
+                    phase="recovery",
                 )
                 content = getattr(response.choices[0].message, "content", "") or ""
                 payload = _extract_json_object(content)
@@ -421,6 +697,8 @@ class MultiModelAgent:
                         "meaningful_check": _is_meaningful_verification_command(command),
                     }
                     self.last_task_report["commands"].append(record)
+                    record["executed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                    self.workspace_memory.record_command(record)
                     output = (
                         str(result.get("stdout", "") if isinstance(result, dict) else result)
                         + "\n"
@@ -430,7 +708,10 @@ class MultiModelAgent:
                         re.search(r"Ran\s+[1-9]\d*\s+tests?\b", output, re.IGNORECASE)
                     )
                     if record["success"] and record["return_code"] == 0 and record["meaningful_check"] and tests_ran:
-                        return not self._missing_expected_artifacts(task_context)
+                        complete = not self._missing_expected_artifacts(task_context)
+                        if self.last_task_report.get("specification"):
+                            complete = complete and not self._task_completeness_issues()
+                        return complete
                     if test_files and not tests_ran:
                         last_error = "Test command returned zero but did not report running any tests. Check discovery/import paths."
                     else:
@@ -438,7 +719,10 @@ class MultiModelAgent:
                     last_error += "\n" + output
                     continue
 
-                return not self._missing_expected_artifacts(task_context)
+                complete = not self._missing_expected_artifacts(task_context)
+                if self.last_task_report.get("specification"):
+                    complete = complete and not self._task_completeness_issues()
+                return complete
             except Exception as error:
                 last_error = f"{type(error).__name__}: {error}"
 
@@ -448,8 +732,81 @@ class MultiModelAgent:
         if self.status_callback:
             self.status_callback(message)
 
-    def get_client(self, role="coder"):
-        provider = str(self.config.get("provider", "groq")).strip().lower()
+    def emit_event(self, event, **data):
+        if self.event_bus:
+            self.event_bus.emit(event, **data)
+
+    def _chat_with_events(self, client, messages, tools=None, provider=None, phase="model"):
+        started = time.monotonic()
+        self.emit_event("model.request", provider=provider or self.config.get("provider", "configured"),
+                        model=getattr(client, "model", "configured"), phase=phase)
+        timeout = max(1, int(self.config.get("llm_slot_timeout_seconds", self.config.get("request_timeout_seconds", 90))))
+        acquired = self._llm_semaphore.acquire(timeout=timeout)
+        if not acquired:
+            message = "Timed out waiting for an LLM concurrency slot"
+            self.last_task_report.setdefault("llm_requests", []).append({
+                "provider": provider or self.config.get("provider", "configured"),
+                "model": getattr(client, "model", "configured"), "phase": phase,
+                "duration_seconds": time.monotonic() - started, "success": False, "error": message,
+            })
+            self.emit_event("model.response", duration=time.monotonic() - started,
+                            success=False, phase=phase, error=message)
+            raise TimeoutError(message)
+        attempt_record = {
+            "provider": provider or self.config.get("provider", "configured"),
+            "model": getattr(client, "model", "configured"),
+            "phase": phase,
+            "attempt": 1,
+            "success": None,
+        }
+        self.last_task_report.setdefault("llm_attempts", []).append(attempt_record)
+        self._current_model = attempt_record["model"]
+        self._current_phase = phase
+        try:
+            response = client.chat(messages, tools=tools)
+        except Exception as error:
+            self.last_task_report["llm_attempts"][-1]["success"] = False
+            duration = time.monotonic() - started
+            error_message = safe_error(error, ("GROQ_API_KEY", "NVIDIA_API_KEY"))
+            self.last_task_report.setdefault("llm_requests", []).append({
+                "provider": provider or self.config.get("provider", "configured"),
+                "model": getattr(client, "model", "configured"), "phase": phase,
+                "duration_seconds": duration, "success": False, "error": error_message,
+            })
+            self.emit_event("model.response", duration=time.monotonic() - started,
+                            success=False, phase=phase, error=error_message)
+            raise
+        finally:
+            self._llm_semaphore.release()
+        duration = time.monotonic() - started
+        self.last_task_report["llm_attempts"][-1]["success"] = True
+        self.last_task_report.setdefault("llm_requests", []).append({
+            "provider": provider or self.config.get("provider", "configured"),
+            "model": getattr(client, "model", "configured"), "phase": phase,
+            "duration_seconds": duration, "success": True,
+        })
+        self.emit_event("model.response", duration=time.monotonic() - started,
+                        success=True, phase=phase)
+        return response
+
+    def _record_provider_retry(self, provider, attempt, attempts, delay, error):
+        requests = self.last_task_report.setdefault("llm_attempts", [])
+        if requests and requests[-1].get("success") is None:
+            requests[-1]["success"] = False
+        requests.append({
+            "provider": provider,
+            "model": getattr(self, "_current_model", "configured"),
+            "phase": getattr(self, "_current_phase", "model"),
+            "attempt": int(attempt) + 1,
+            "success": None,
+        })
+        self.emit_event("provider.retry", provider=provider.upper(), attempt=attempt,
+                        attempts=attempts, delay=delay, error=safe_error(error))
+
+    def get_client(self, role="coder", provider=None, model=None):
+        provider = str(provider or self.config.get("provider", "ollama" if self.config.get("execution_mode") == "offline" else "groq")).strip().lower()
+        if self.config.get("execution_mode") == "offline" and provider not in {"ollama", "local"}:
+            raise RuntimeError(f"Offline mode blocks hosted provider '{provider}'. Select online mode to use hosted APIs.")
         common = {
             "temperature": self.config.get("temperature", 0.1),
             "max_tokens": self.config.get("max_tokens", 8192),
@@ -462,21 +819,34 @@ class MultiModelAgent:
                     "ollama_base_url", "http://localhost:11434/v1"
                 ),
                 force_json_tools=self.config.get("ollama_force_json_tools", True),
+                timeout=self.config.get("request_timeout_seconds", 90),
                 **common,
             )
 
         if provider in {"nvidia", "nvidia_nim"}:
             retry = self.config.get("retry", {})
+            role_model = self.config.get(f"nvidia_{role}_model")
+            if role == "planner":
+                role_model = role_model or self.config.get("nvidia_architect_model")
+            configured_model = (model
+                                or (self.config.get("selected_model") if role == "coder" else None)
+                                or role_model
+                                or self.config.get("nvidia_model", "qwen/qwen2.5-coder-32b-instruct"))
             return NvidiaClient(
-                model=self.config.get(
-                    "nvidia_model", "poolside/laguna-xs-2.1"
-                ),
+                model=configured_model,
                 base_url=self.config.get(
                     "nvidia_base_url", "https://integrate.api.nvidia.com/v1"
+                ),
+                timeout=self.config.get(
+                    "nvidia_request_timeout_seconds",
+                    self.config.get("request_timeout_seconds", 90),
                 ),
                 **common,
                 max_attempts=retry.get("max_attempts", 3),
                 base_delay=retry.get("base_delay", 1.5),
+                on_retry=lambda attempt, attempts, delay, error: self._record_provider_retry(
+                    "nvidia", attempt, attempts, delay, error,
+                ),
             )
 
         if provider != "groq":
@@ -484,33 +854,28 @@ class MultiModelAgent:
                 f"Unsupported provider: {provider}. Use 'nvidia', 'groq', or 'ollama'."
             )
 
-        model = self.models.get(role) or self.models.get("coder")
+        model = model or self.models.get(role) or self.models.get("coder")
         if not model:
             raise KeyError(f"No model configured for role: {role}")
 
         retry = self.config.get("retry", {})
         return GroqClient(
             model=model,
+            timeout=self.config.get("request_timeout_seconds", 90),
             **common,
             max_attempts=retry.get("max_attempts", 3),
             base_delay=retry.get("base_delay", 1.5),
+            on_retry=lambda attempt, attempts, delay, error: self._record_provider_retry(
+                "groq", attempt, attempts, delay, error,
+            ),
         )
-
-    def get_project_snapshot(self):
-        try:
-            result = self.tools["list_files"](self.workspace)
-            if isinstance(result, list):
-                result = result[:500]
-            return json.dumps(result, ensure_ascii=False)[:12000]
-        except Exception as error:
-            return f"Unable to scan project: {error}"
 
     def classify_task(self, task):
         text = task.lower()
         if any(word in text for word in (
-            "build", "create", "implement", "application", "website",
+            "build", "create", "implement", "application", "website", "game",
             "backend", "frontend", "database", "authentication", "refactor",
-            "deploy", "integrate",
+            "deploy", "integrate", "banao", "bana do", "project", "full app",
         )):
             return "COMPLEX"
         if any(word in text for word in (
@@ -520,16 +885,281 @@ class MultiModelAgent:
             return "MEDIUM"
         return "SIMPLE"
 
+    @staticmethod
+    def _has_provider_key(provider):
+        key_name = "GROQ_API_KEY" if provider == "groq" else "NVIDIA_API_KEY"
+        value = os.getenv(key_name, "").strip()
+        return bool(value and not re.match(r"(?i)^(your_|replace|put[_ -]?|<|\$\{)", value))
+
+    def _hosted_candidates(self, role, configured="auto"):
+        if self.config.get("execution_mode") == "offline" or self.config.get("local_only") or self.config.get("hosted_api_enabled") is False:
+            return []
+        configured = str(configured or "auto").strip().lower()
+        valid = {"nvidia", "nvidia_nim", "groq"}
+        if configured == "auto":
+            current = str(self.config.get("provider", "ollama")).lower()
+            preferred = str(self.config.get("hosted_provider_preference", "auto")).lower()
+            selected = current if current in valid else preferred
+            order = [selected] if selected in valid else []
+        elif configured in valid:
+            order = [configured]
+        else:
+            return []
+        result = []
+        for provider in order:
+            if provider == "nvidia_nim":
+                provider = "nvidia"
+            if provider in result or not self._has_provider_key(provider):
+                continue
+            if provider == "groq":
+                model = self.config.get("architect_model") if role == "planner" else self.config.get("coder_model")
+                model = model or self.models.get(role) or self.models.get("coder")
+            else:
+                model = self.config.get(f"nvidia_{role}_model")
+                if role == "planner":
+                    model = model or self.config.get("nvidia_architect_model")
+                model = model or self.config.get("nvidia_model")
+            if model:
+                result.append(provider)
+        return result
+
+    def _model_for(self, provider, role):
+        if provider == "groq":
+            return (self.config.get("architect_model") if role == "planner" else self.config.get("coder_model")) or self.models.get(role) or self.models.get("coder")
+        model = self.config.get(f"nvidia_{role}_model")
+        if role == "planner":
+            model = model or self.config.get("nvidia_architect_model")
+        return model or self.config.get("nvidia_model")
+
+    @staticmethod
+    def _response_text(response):
+        try:
+            return (response.choices[0].message.content or "").strip()
+        except (AttributeError, IndexError, TypeError):
+            return ""
+
+    @staticmethod
+    def _usage_metadata(response):
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return None
+        values = {}
+        for name in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = getattr(usage, name, None)
+            if value is None and isinstance(usage, dict):
+                value = usage.get(name)
+            if isinstance(value, (int, float)):
+                values[name] = value
+        return values or None
+
+    def _workspace_context_text(self, task, previous_report=None, specification=None):
+        memory_state = self.workspace_memory.refresh()
+        context = self.workspace_context.build_context(
+            task=task,
+            previous_report=previous_report or {},
+            recent_history=self.session_history,
+            recent_tool_calls=self.recent_tool_calls,
+            specification=specification,
+            refresh=False,
+        )
+        memory_text = self.workspace_memory.context_for(
+            task, max_chars=int(self.config.get("workspace_memory_context_chars", 4200)), refresh=False
+        )
+        if self.last_task_report and self.last_task_report.get("task_id") == self.current_task_id:
+            self.last_task_report["context_snapshot"] = redact_secrets(context + "\n\n" + memory_text)[:18000]
+            self.last_task_report["memory_context"] = {
+                "workspace_id": self.workspace_memory.workspace_id,
+                "status": self.workspace_memory.status,
+                "indexed_files": memory_state.get("indexed_files", 0),
+                "retrieved_paths": list(self.workspace_memory.retrieved_paths),
+                "project_fingerprint": self.workspace_memory._data["manifest"].get("project_fingerprint"),
+            }
+        self.emit_event("workspace.memory", **self.workspace_memory.dashboard_state())
+        return context + "\n\n" + memory_text
+
+    def _trajectory_source_changes(self, report):
+        if not self.workspace_memory.enabled:
+            return {}
+        changes, total = {}, 0
+        root = os.path.realpath(self.workspace)
+        for relative in report.get("changed_files", [])[:12]:
+            normalized = str(relative).replace("\\", "/")
+            if self.workspace_context._excluded(normalized):
+                continue
+            full = os.path.realpath(os.path.join(root, normalized))
+            try:
+                if os.path.commonpath([root, full]) != root:
+                    continue
+                size = os.path.getsize(full)
+                if size > 12000 or total + size > 48000:
+                    continue
+                with open(full, "r", encoding="utf-8", errors="replace") as source:
+                    content = redact_secrets(source.read(12000))
+                changes[normalized] = content
+                total += len(content.encode("utf-8"))
+            except (OSError, ValueError):
+                continue
+        return changes
+
+    def _architect_task(self, task, previous_report=None):
+        """Use one configured hosted model to create a validated task contract."""
+        fallback = fallback_specification(task)
+        metadata = {"provider": "none", "model": "none", "status": "NOT RUN", "error": None}
+        if not self.config.get("task_architect_enabled", True) or self.classify_task(task) != "COMPLEX":
+            metadata["status"] = "SKIPPED (simple task)"
+            return fallback, metadata
+        providers = self._hosted_candidates("planner", self.config.get("architect_provider", "auto"))
+        if not providers:
+            metadata["status"] = "NOT RUN (local-only or no configured hosted credentials/model)"
+            return fallback, metadata
+
+        schema = {
+            "task_type": "string", "project_name": "string", "intended_outcome": "string",
+            "language": "string", "framework": "string", "features": ["string"],
+            "expected_files": [{"path": "relative/path", "responsibility": "string"}],
+            "dependencies": ["string"], "run_commands": ["string"],
+            "test_commands": ["string"], "acceptance_criteria": ["string"],
+            "assumptions": ["string"], "definition_of_done": "string",
+        }
+        prompt = (
+            "Analyze the user's actual software task and return exactly one JSON object matching this schema. "
+            "Choose sensible defaults rather than asking nonessential questions. Infer the project type; do not force a game. "
+            "For a game, specify playable mechanics, input, progression/scoring, end/restart behavior, files, and tests. "
+            "List only concrete, necessary files using safe workspace-relative paths. Avoid credentials and secrets. "
+            "Do not claim implementation or test results.\nSCHEMA:\n"
+            + json.dumps(schema, ensure_ascii=False)
+            + "\nUSER TASK:\n" + redact_secrets(task)
+            + "\n\nCOMPACT LIVE WORKSPACE CONTEXT:\n"
+            + self._workspace_context_text(task, previous_report=previous_report)
+        )
+        errors = []
+        for provider in providers:
+            model = self._model_for(provider, "planner")
+            metadata.update({"provider": provider, "model": model})
+            try:
+                client = self.get_client("planner", provider=provider, model=model)
+                response = self._chat_with_events(
+                    client,
+                    [{"role": "system", "content": "You are a software task architect. Return machine-readable JSON only."}, {"role": "user", "content": prompt}],
+                    tools=None, provider=provider, phase="planning",
+                )
+                specification = parse_specification(self._response_text(response))
+                return specification, {"provider": provider, "model": getattr(client, "model", model), "status": "PASS", "error": None, "usage": self._usage_metadata(response)}
+            except Exception as error:
+                errors.append(f"{provider}: {type(error).__name__}: {redact_secrets(str(error))[:600]}")
+        metadata["status"] = "FAILED; deterministic specification used"
+        metadata["error"] = "; ".join(errors)
+        return fallback, metadata
+
+    def _escalation_provider(self, original_provider=None):
+        configured = self.config.get("escalation_provider", "auto")
+        candidates = self._hosted_candidates("coder", configured)
+        if configured == "auto" and original_provider in {"groq", "nvidia", "nvidia_nim"}:
+            alternatives = [item for item in candidates if item != original_provider]
+            if alternatives:
+                return alternatives[0]
+        return candidates[0] if candidates else None
+
     def execute_tool(self, name, arguments):
+        started = time.monotonic()
+        safe_arguments = {key: value for key, value in arguments.items()
+                          if key not in {"content", "old_text", "new_text"}} if isinstance(arguments, dict) else {}
+        self.emit_event("tool.started", tool=name, label=self._status_for_tool(name, arguments),
+                        arguments=safe_arguments)
+
+        def finish(result):
+            self.last_task_report.setdefault("tool_durations", []).append({
+                "tool": name, "duration_seconds": time.monotonic() - started,
+                "success": not (isinstance(result, dict) and result.get("success") is False),
+            })
+            safe_result = result if isinstance(result, dict) else {"success": True, "summary": str(result)[:500]}
+            safe_result = {
+                key: (redact_secrets(str(value))[-500:] if isinstance(value, str) else value)
+                for key, value in safe_result.items()
+                if key in {"success", "error", "return_code", "cwd", "duration_seconds", "timed_out", "stdout", "stderr", "summary"}
+            }
+            self.emit_event("tool.result", tool=name, command=redact_secrets(str(arguments.get("command", "")))[:500],
+                            result=safe_result, duration=time.monotonic() - started)
+            return self._record_tool_outcome(name, arguments if isinstance(arguments, dict) else {}, result)
+
         if name not in self.tools:
-            return {"success": False, "error": f"Unknown tool: {name}"}
+            result = {"success": False, "error": f"Unknown tool: {name}"}
+            self.emit_event("tool.finished", tool=name, duration=time.monotonic() - started, success=False)
+            return finish(result)
         if not isinstance(arguments, dict):
-            return {"success": False, "error": "Tool arguments must be a JSON object."}
+            result = {"success": False, "error": "Tool arguments must be a JSON object."}
+            self.emit_event("tool.finished", tool=name, duration=time.monotonic() - started, success=False)
+            return finish(result)
+        if name == "read_file":
+            path_name = os.path.basename(str(arguments.get("path", ""))).lower()
+            if path_name == ".env" or path_name.startswith(".env.") or path_name.endswith((".pem", ".key")) or path_name in {"id_rsa", "id_ed25519", "credentials.json"}:
+                result = {"success": False, "error": "Reading credential and private-key files is blocked."}
+                self.emit_event("tool.finished", tool=name, duration=time.monotonic() - started, success=False)
+                return finish(result)
+
+        command_snapshot = self._workspace_file_snapshot() if name == "run_command" else None
+        path = arguments.get("path") if name in {"read_file", "write_file", "edit_file"} else None
+        full_path = os.path.abspath(os.path.join(self.workspace, path)) if path else None
+        try:
+            if full_path and os.path.commonpath([os.path.abspath(self.workspace), full_path]) != os.path.abspath(self.workspace):
+                full_path = None
+        except ValueError:
+            full_path = None
+        existed_before = bool(full_path and os.path.isfile(full_path))
+        before = None
+        if name in {"write_file", "edit_file"} and existed_before:
+            try:
+                if os.path.getsize(full_path) <= 2_000_000:
+                    with open(full_path, "r", encoding="utf-8", errors="replace") as file:
+                        before = file.read()
+            except OSError:
+                before = None
 
         try:
-            result = self.tools[name](self.workspace, **arguments)
+            call_arguments = dict(arguments)
+            if name == "run_command" and self.config.get("execution_mode") == "offline":
+                call_arguments["offline"] = True
+            result = self.tools[name](self.workspace, **call_arguments)
         except Exception as error:
-            return {"success": False, "error": f"{type(error).__name__}: {error}"}
+            result = {"success": False, "error": f"{type(error).__name__}: {redact_secrets(str(error))}"}
+            self.emit_event("tool.finished", tool=name, duration=time.monotonic() - started, success=False)
+            return finish(result)
+
+        if path:
+            relative = os.path.relpath(full_path, os.path.abspath(self.workspace)).replace("\\", "/") if full_path else str(path).replace("\\", "/")
+            if name == "read_file" and isinstance(result, str):
+                self.emit_event("file.activity", action="read", path=relative, lines=len(result.splitlines()))
+            elif name in {"write_file", "edit_file"} and isinstance(result, dict) and result.get("success"):
+                after = None
+                try:
+                    if os.path.getsize(full_path) <= 2_000_000:
+                        with open(full_path, "r", encoding="utf-8", errors="replace") as file:
+                            after = file.read()
+                except (OSError, TypeError):
+                    pass
+                line_count = len(after.splitlines()) if after is not None else (result.get("file_state") or {}).get("lines")
+                action = "created" if not existed_before else "modified"
+                if action == "created":
+                    added, removed = line_count, 0
+                elif before is not None and after is not None:
+                    added, removed = _dashboard_line_delta(before, after)
+                else:
+                    added, removed = None, None
+                self.emit_event("file.activity", action=action, path=relative,
+                                lines=line_count, added=added, removed=removed)
+        if command_snapshot is not None:
+            self._emit_command_file_changes(command_snapshot)
+
+        def sanitize(value):
+            if isinstance(value, str):
+                return redact_secrets(value)
+            if isinstance(value, list):
+                return [sanitize(item) for item in value]
+            if isinstance(value, dict):
+                return {key: sanitize(item) for key, item in value.items()}
+            return value
+
+        result = sanitize(result)
 
         # Bound tool output so a large repository or command output cannot flood context.
         try:
@@ -539,8 +1169,53 @@ class MultiModelAgent:
 
         if len(serialized) > MAX_TOOL_RESULT_CHARS:
             serialized = serialized[:MAX_TOOL_RESULT_CHARS] + "\n...[tool output truncated]"
-            return {"success": True, "truncated": True, "output": serialized}
-        return result
+            self.emit_event("tool.finished", tool=name, duration=time.monotonic() - started, success=True)
+            return finish({"success": True, "truncated": True, "output": serialized})
+        self.emit_event("tool.finished", tool=name, duration=time.monotonic() - started,
+                        success=not (isinstance(result, dict) and result.get("success") is False))
+        return finish(result)
+
+    def _workspace_file_snapshot(self):
+        """Cache signatures and line counts within a bounded per-scan read budget."""
+        snapshot = {}
+        scan_budget = MAX_COMMAND_LINE_COUNT_SCAN_BYTES
+        try:
+            paths = self.tools.get("list_files", lambda workspace: [])(self.workspace)
+            for path in paths if isinstance(paths, list) else []:
+                full_path = os.path.join(self.workspace, path)
+                try:
+                    stat = os.stat(full_path)
+                    normalized = str(path).replace("\\", "/")
+                    signature = (stat.st_mtime_ns, stat.st_size)
+                    previous = (self._terminal_file_state or {}).get(normalized)
+                    lines = previous["lines"] if previous and previous["signature"] == signature else None
+                    if (lines is None and stat.st_size <= MAX_COMMAND_LINE_COUNT_FILE_BYTES
+                            and stat.st_size <= scan_budget):
+                        with open(full_path, "r", encoding="utf-8", errors="replace") as file:
+                            lines = sum(1 for _ in file)
+                        scan_budget -= stat.st_size
+                    snapshot[normalized] = {"signature": signature, "lines": lines}
+                except OSError:
+                    continue
+        except Exception:
+            return None
+        self._terminal_file_state = snapshot
+        return snapshot
+
+    def _emit_command_file_changes(self, before):
+        after = self._workspace_file_snapshot()
+        if before is None or after is None:
+            return
+        for path in before.keys() - after.keys():
+            self.emit_event("file.activity", action="deleted", path=path, lines=None,
+                            removed=before[path].get("lines"))
+        for path in after.keys() - before.keys():
+            lines = after[path].get("lines")
+            self.emit_event("file.activity", action="created", path=path, lines=lines, added=lines)
+        for path in before.keys() & after.keys():
+            if before[path]["signature"] != after[path]["signature"]:
+                self.emit_event("file.activity", action="modified via command", path=path,
+                                lines=after[path].get("lines"), added=None, removed=None)
 
     def _status_for_tool(self, name, arguments):
         path = arguments.get("path", "") if isinstance(arguments, dict) else ""
@@ -588,6 +1263,76 @@ class MultiModelAgent:
             "content": output[:MAX_TOOL_RESULT_CHARS],
         }
 
+    def _run_independent_reads(self, tool_calls):
+        """Run independent read-only tool calls concurrently; retain model call order."""
+        allowed = {"list_files", "read_file", "search_files"}
+        if self.max_workers <= 1 or len(tool_calls) < 2 or any(call.function.name not in allowed for call in tool_calls):
+            return {}
+        worker_count = min(self.max_workers, len(tool_calls))
+        results, futures = {}, {}
+        started = time.monotonic()
+        timed_out_workers = set()
+        timeout = max(0.1, float(self.config.get("parallel_tool_timeout_seconds", 120)))
+        for index, call in enumerate(tool_calls):
+            try:
+                arguments = json.loads(call.function.arguments or "{}")
+            except (json.JSONDecodeError, TypeError):
+                arguments = {}
+            self.emit_event("worker.queued", worker_id=f"read-{index + 1}",
+                            task=str(arguments.get("path", arguments.get("query", "workspace"))),
+                            operation=call.function.name, status="QUEUED")
+        pool = ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="codex-read")
+        pending = set()
+        try:
+            for index, call in enumerate(tool_calls):
+                try:
+                    arguments = json.loads(call.function.arguments or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    arguments = {}
+                worker_id = f"read-{index + 1}"
+                operation = call.function.name
+                description = str(arguments.get("path", arguments.get("query", "workspace")))
+                def run_one(tool_call=call, identifier=worker_id, label=description, tool=operation):
+                    began = time.monotonic()
+                    self.emit_event("worker.started", worker_id=identifier, task=label,
+                                    operation=tool, status="RUNNING")
+                    try:
+                        message = self._tool_message(tool_call)
+                        tool_result = json.loads(message["content"])
+                        if isinstance(tool_result, dict) and tool_result.get("success") is False:
+                            status, summary = "FAILED", str(tool_result.get("error", "tool failed"))[:100]
+                        else:
+                            status, summary = "COMPLETED", "read complete"
+                    except Exception as error:
+                        message = {"role": "tool", "tool_call_id": tool_call.id,
+                                   "content": json.dumps({"success": False, "error": f"{type(error).__name__}: {redact_secrets(str(error))}"})}
+                        status, summary = "FAILED", type(error).__name__
+                    if identifier not in timed_out_workers:
+                        self.emit_event("worker.finished", worker_id=identifier, status=status,
+                                        duration=time.monotonic() - began, summary=summary)
+                    return message
+                futures[pool.submit(run_one)] = (index, worker_id)
+            done, pending = wait(futures, timeout=timeout)
+            for future in done:
+                index, _worker_id = futures[future]
+                results[index] = future.result()
+            for future in pending:
+                index, worker_id = futures[future]
+                timed_out_workers.add(worker_id)
+                future.cancel()
+                results[index] = {"role": "tool", "tool_call_id": tool_calls[index].id,
+                                  "content": json.dumps({"success": False,
+                                    "error": f"Read-only tool operation timed out after {timeout:g}s"})}
+                self.emit_event("worker.finished", worker_id=worker_id, status="FAILED",
+                                duration=timeout, summary="timed out; cancellation requested")
+        finally:
+            pool.shutdown(wait=not pending, cancel_futures=True)
+        self.last_task_report.setdefault("performance", []).append({
+            "kind": "parallel_read_batch", "workers": worker_count,
+            "duration_seconds": time.monotonic() - started,
+        })
+        return results
+
     def _assistant_tool_call_message(self, tool_calls):
         return {
             "role": "assistant",
@@ -605,19 +1350,31 @@ class MultiModelAgent:
             ],
         }
 
-    def integrate(self, task, reports=None):
+    def integrate(self, task, reports=None, coder_provider=None):
         """Run the actual coding task until the model finishes or hits the step cap."""
-        self.show_status("Thinking")
-        client = self.get_client("coder")
+        self.show_status("Preparing implementation")
+        provider = str(coder_provider or self.config.get("provider", "ollama" if self.config.get("execution_mode") == "offline" else "groq")).lower()
+        client = self.get_client("coder", provider=provider) if coder_provider else self.get_client("coder")
+        reports = reports if isinstance(reports, dict) else {}
+        previous_report = reports.get("previous_task_report", {})
+        previous_execution = self.last_task_report if isinstance(self.last_task_report, dict) else {}
         self.last_task_report = {
+            "task_id": self.current_task_id,
             "task": task,
             "changed_files": [],
             "commands": [],
             "static_checks": [],
+            "specification": reports.get("specification"),
+            "architect": reports.get("architect"),
+            "coder": {"provider": provider, "model": getattr(client, "model", "configured")},
+            "escalations": list(reports.get("escalations", [])),
+            "tool_events": list(self.task_tool_events),
+            "llm_requests": list(previous_execution.get("llm_requests", [])),
+            "llm_attempts": list(previous_execution.get("llm_attempts", [])),
+            "tool_durations": list(previous_execution.get("tool_durations", [])),
         }
 
         tools_description = ", ".join(sorted(self.tools))
-        provider = str(self.config.get("provider", "groq")).lower()
         local_json_mode = (
             provider in {"ollama", "local"}
             and bool(self.config.get("ollama_force_json_tools", True))
@@ -673,14 +1430,39 @@ Workspace root is the current directory. Keep file operations inside it.
 """
 
         messages = [{"role": "system", "content": system_prompt}]
-        messages.extend(self.session_history[-(MAX_SESSION_TURNS * 2):])
+        hosted_coder = provider not in {"ollama", "local"}
+        if not hosted_coder:
+            messages.extend(self.session_history[-(MAX_SESSION_TURNS * 2):])
+        contract = reports.get("specification")
+        contract_text = ""
+        if contract:
+            contract_text = (
+                "\n\nIMPLEMENTATION CONTRACT (validated JSON; inspect the workspace before edits):\n"
+                + redact_secrets(json.dumps(contract, ensure_ascii=False))
+                + "\nInclude the acceptance criteria in your plan, create each expected file, run the specified checks, and do not claim completion without actual tool results."
+            )
+        repair_context = reports.get("repair_context", "")
+        if repair_context:
+            contract_text += "\n\nPREVIOUS LOCAL ATTEMPT AND ACTUAL VERIFICATION RESULTS:\n" + redact_secrets(str(repair_context))
         messages.append({
             "role": "user",
             "content": (
-                f"Task: {task}\n\n"
+                f"Task: {redact_secrets(task)}{contract_text}\n\n"
                 "Work autonomously. Inspect, implement, run checks, fix failures, and verify."
             ),
         })
+        base_system_prompt = system_prompt
+
+        def refresh_system_context():
+            current_context = self._workspace_context_text(
+                task,
+                previous_report=previous_report,
+                specification=contract,
+            )
+            messages[0] = {
+                "role": "system",
+                "content": base_system_prompt + "\n\nCURRENT WORKSPACE CONTEXT:\n" + current_context,
+            }
 
         malformed_tool_retries = 0
         completion_retries = 0
@@ -701,12 +1483,24 @@ Workspace root is the current directory. Keep file operations inside it.
         # requests here caused stale files/tests to be treated as current requirements.
         task_context = task
         consecutive_no_progress = 0
+        no_progress_recoveries = 0
 
-        for step in range(self.max_steps):
-            self.show_status(f"Thinking · step {step + 1}/{self.max_steps}")
+        for _ in range(self.max_steps):
+            self.show_status("Working")
+            self.emit_event("step.started", phase="model")
+            refresh_system_context()
             request_tools = None if disable_tools_next else self.tool_schemas
             disable_tools_next = False
-            response = client.chat(messages, tools=request_tools)
+            response = self._chat_with_events(
+                client, messages, tools=request_tools, provider=provider,
+            )
+            usage = self._usage_metadata(response)
+            if usage:
+                self.last_task_report.setdefault("usage", []).append({
+                    "provider": provider,
+                    "model": getattr(client, "model", "configured"),
+                    **usage,
+                })
             message = response.choices[0].message
             native_calls = getattr(message, "tool_calls", None) or []
             tool_calls = list(native_calls)
@@ -767,7 +1561,12 @@ Workspace root is the current directory. Keep file operations inside it.
                     continue
 
                 missing_artifacts = []
-                for artifact in _expected_artifact_paths(task_context):
+                expected_paths = list(_expected_artifact_paths(task_context))
+                for item in ((self.last_task_report or {}).get("specification") or {}).get("expected_files", []):
+                    path = item.get("path") if isinstance(item, dict) else None
+                    if path and path not in expected_paths:
+                        expected_paths.append(path)
+                for artifact in expected_paths:
                     full_path = os.path.realpath(os.path.join(self.workspace, artifact))
                     workspace_root = os.path.realpath(self.workspace)
                     try:
@@ -783,11 +1582,12 @@ Workspace root is the current directory. Keep file operations inside it.
                 echoed_tool_result = _is_tool_result_json(final_text)
                 no_local_work = local_json_mode and executed_tool_calls == 0
                 unverified_changes = local_json_mode and mutation_needs_verification
+                spec_issues = self._task_completeness_issues() if self.last_task_report.get("specification") else []
                 # A local model gets one chance to continue naturally. If it still
                 # claims completion with missing files, switch to constrained recovery.
                 completion_retry_limit = 1 if local_json_mode else 4
                 if (
-                    (echoed_tool_result or missing_artifacts or no_local_work or unverified_changes)
+                    (echoed_tool_result or missing_artifacts or no_local_work or unverified_changes or spec_issues)
                     and completion_retries < completion_retry_limit
                 ):
                     completion_retries += 1
@@ -812,6 +1612,8 @@ Workspace root is the current directory. Keep file operations inside it.
                         reasons.append(
                             "You changed a source file but have not verified it with a relevant run_command check. Run the check, fix failures, and rerun it."
                         )
+                    if spec_issues:
+                        reasons.append("Acceptance criteria are not yet satisfied: " + "; ".join(spec_issues) + ".")
 
                     messages.append({
                         "role": "user",
@@ -826,7 +1628,7 @@ Workspace root is the current directory. Keep file operations inside it.
                     })
                     continue
 
-                if echoed_tool_result or missing_artifacts or no_local_work or unverified_changes:
+                if echoed_tool_result or missing_artifacts or no_local_work or unverified_changes or spec_issues:
                     details = []
                     if echoed_tool_result:
                         details.append("the model repeatedly echoed tool-result JSON")
@@ -838,6 +1640,8 @@ Workspace root is the current directory. Keep file operations inside it.
                         details.append("no workspace tools were executed")
                     if unverified_changes:
                         details.append("source changes were not verified with a successful command")
+                    if spec_issues:
+                        details.append("acceptance criteria failed: " + "; ".join(spec_issues))
                     final_text = (
                         "Local Codex could not verify task completion because "
                         + "; ".join(details)
@@ -845,16 +1649,17 @@ Workspace root is the current directory. Keep file operations inside it.
                         "Try Groq or a stronger local coding model, then ask it to continue."
                     )
 
-                if local_json_mode and missing_artifacts and not local_fallback_attempted:
+                if local_json_mode and (missing_artifacts or spec_issues) and not local_fallback_attempted:
                     local_fallback_attempted = True
                     self.show_status("Model stopped before implementation; generating missing files")
+                    recovery_paths = list(expected_paths)
                     recovered_files = self._generate_missing_files_locally(
-                        client, task_context, _expected_artifact_paths(task_context)
+                        client, task_context, recovery_paths
                     )
                     if recovered_files:
                         summary = "Generated missing implementation files after the model stopped prematurely, then ran verification."
                         self.session_history.extend([
-                            {"role": "user", "content": task},
+                            {"role": "user", "content": redact_secrets(task)},
                             {"role": "assistant", "content": summary},
                         ])
                         self.session_history = self.session_history[-(MAX_SESSION_TURNS * 2):]
@@ -867,7 +1672,7 @@ Workspace root is the current directory. Keep file operations inside it.
                     )
 
                 self.session_history.extend([
-                    {"role": "user", "content": task},
+                    {"role": "user", "content": redact_secrets(task)},
                     {"role": "assistant", "content": final_text},
                 ])
                 self.session_history = self.session_history[-(MAX_SESSION_TURNS * 2):]
@@ -892,7 +1697,8 @@ Workspace root is the current directory. Keep file operations inside it.
             # Execute one-action-at-a-time tool requests and give local models readable
             # results instead of a synthetic tool-call protocol they may echo forever.
             duplicate_mutation = False
-            for tool_call in tool_calls:
+            parallel_reads = self._run_independent_reads(tool_calls)
+            for tool_index, tool_call in enumerate(tool_calls):
                 name = tool_call.function.name
                 try:
                     arguments = json.loads(tool_call.function.arguments or "{}")
@@ -919,7 +1725,7 @@ Workspace root is the current directory. Keep file operations inside it.
                     duplicate_mutation = True
                     tool_message = None
                 else:
-                    tool_message = self._tool_message(tool_call)
+                    tool_message = parallel_reads.get(tool_index) or self._tool_message(tool_call)
                     try:
                         tool_result = json.loads(tool_message["content"])
                     except (json.JSONDecodeError, TypeError):
@@ -950,21 +1756,32 @@ Workspace root is the current directory. Keep file operations inside it.
                             self.last_task_report["changed_files"].append(path)
                         verification = verify_changed_file(self.workspace, path)
                         self.last_task_report["static_checks"].append(verification)
+                        self.emit_event("verification", message=f"Static check {path}: {'PASS' if verification.get('success') else 'FAIL'}")
                         tool_result["verification"] = verification
                         mutation_needs_verification = True
                         if not verification.get("success"):
                             self.show_status(f"Automatic verification failed for {path}")
                 if name == "run_command" and isinstance(tool_result, dict):
-                    command = str(arguments.get("command", ""))
+                    command = redact_secrets(str(arguments.get("command", "")))
                     record = {
                         "command": command,
+                        "cwd": tool_result.get("cwd", self.workspace),
+                        "duration_seconds": tool_result.get("duration_seconds"),
+                        "timed_out": tool_result.get("timed_out", False),
                         "return_code": tool_result.get("return_code"),
                         "success": tool_result.get("success") is True,
                         "stdout": tool_result.get("stdout", ""),
                         "stderr": tool_result.get("stderr", ""),
                         "meaningful_check": _is_meaningful_verification_command(command),
                     }
+                    record["test_counts"] = _test_counts(
+                        command, record["stdout"], record["stderr"]
+                    )
                     self.last_task_report["commands"].append(record)
+                    record["executed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                    self.workspace_memory.record_command(record)
+                    if record["meaningful_check"]:
+                        self.emit_event("verification", message=f"{command} — {'PASS' if record['success'] and record['return_code'] == 0 else 'FAIL'}")
                     if (
                         record["meaningful_check"]
                         and record["success"]
@@ -1024,7 +1841,11 @@ Workspace root is the current directory. Keep file operations inside it.
                     local_fallback_attempted = True
                     self.show_status("Repeated action detected; recovering missing deliverables")
                     recovered_files = self._generate_missing_files_locally(
-                        client, task_context, _expected_artifact_paths(task_context)
+                        client,
+                        task_context,
+                        list(dict.fromkeys(_expected_artifact_paths(task_context) + [
+                            item["path"] for item in ((self.last_task_report or {}).get("specification") or {}).get("expected_files", [])
+                        ])),
                     )
                     if recovered_files:
                         summary = (
@@ -1032,7 +1853,7 @@ Workspace root is the current directory. Keep file operations inside it.
                             "and the available verification command was run."
                         )
                         self.session_history.extend([
-                            {"role": "user", "content": task},
+                            {"role": "user", "content": redact_secrets(task)},
                             {"role": "assistant", "content": summary},
                         ])
                         self.session_history = self.session_history[-(MAX_SESSION_TURNS * 2):]
@@ -1042,6 +1863,27 @@ Workspace root is the current directory. Keep file operations inside it.
                         "but it could not produce all requested files with a passing verification command. "
                         "The task is NOT marked successful; inspect the reported checks and try a stronger model."
                     )
+            elif should_recover:
+                if no_progress_recoveries >= 1:
+                    return self._format_final_report(
+                        "The model repeated actions without making verifiable progress after a recovery prompt. "
+                        "The task is NOT marked successful; inspect the reported missing files and checks."
+                    )
+                no_progress_recoveries += 1
+                repeated_action_count = 0
+                consecutive_no_progress = 0
+                self.emit_event(
+                    "activity",
+                    message="Repeated or unproductive action detected; asking the selected model for one different, verifiable action.",
+                )
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Your recent actions have not made verifiable progress. Do not repeat them. "
+                        "Use the actual tool results, make one concrete change to a required deliverable, "
+                        "then run a relevant verification command. If you cannot continue, explain the blocker."
+                    ),
+                })
 
         # The step cap is a safety net, not an excuse to leave a coding task half done.
         # Before reporting a limit, make one constrained recovery attempt for missing files.
@@ -1055,7 +1897,7 @@ Workspace root is the current directory. Keep file operations inside it.
             if recovered_files:
                 summary = "Recovered the missing implementation after the normal tool loop made insufficient progress."
                 self.session_history.extend([
-                    {"role": "user", "content": task},
+                    {"role": "user", "content": redact_secrets(task)},
                     {"role": "assistant", "content": summary},
                 ])
                 self.session_history = self.session_history[-(MAX_SESSION_TURNS * 2):]
@@ -1066,33 +1908,203 @@ Workspace root is the current directory. Keep file operations inside it.
             "The recovery attempt could not verify all requested deliverables; the task is not marked successful."
         )
         self.session_history.extend([
-            {"role": "user", "content": task},
+                    {"role": "user", "content": redact_secrets(task)},
             {"role": "assistant", "content": limit_message},
         ])
         self.session_history = self.session_history[-(MAX_SESSION_TURNS * 2):]
         return self._format_final_report(limit_message)
 
+    def explain(self, question):
+        """Answer a code question from retrieved workspace evidence without tools."""
+        related = references_existing_context(question)
+        previous = self.last_task_report if related else {}
+        self.workspace_memory.refresh()
+        context = self.workspace_context.build_context(
+            task=question,
+            previous_report=previous,
+            recent_history=self.session_history if related else [],
+            recent_tool_calls=self.recent_tool_calls if related else [],
+            specification=None,
+            refresh=False,
+        )
+        context += "\n\n" + self.workspace_memory.context_for(
+            question, max_chars=int(self.config.get("workspace_memory_context_chars", 4200)), refresh=False
+        )
+        provider = str(self.config.get("provider", "ollama" if self.config.get("execution_mode") == "offline" else "groq")).lower()
+        client = self.get_client("coder")
+        self.emit_event("task.started", task=question, workspace=self.workspace)
+        self.emit_event("workspace.memory", **self.workspace_memory.dashboard_state())
+        try:
+            response = self._chat_with_events(
+                client,
+                [
+                    {"role": "system", "content": (
+                        "You are Local Codex answering a read-only question about the current codebase. "
+                        "Use only the supplied inspected workspace evidence. Do not call tools, suggest an unverified cause as fact, "
+                        "or claim tests ran. Say which evidence is missing when the answer cannot be verified."
+                    )},
+                    {"role": "user", "content": (
+                        f"Question: {redact_secrets(question)}\n\nINSPECTED WORKSPACE CONTEXT:\n{context}"
+                    )},
+                ],
+                tools=None, provider=provider, phase="explanation",
+            )
+            answer = self._response_text(response) or "I could not produce an answer from the available workspace evidence."
+            self.session_history.extend([
+                {"role": "user", "content": question},
+                {"role": "assistant", "content": answer},
+            ])
+            self.session_history = self.session_history[-(MAX_SESSION_TURNS * 2):]
+            return answer
+        finally:
+            self.emit_event("task.finished", status="READ ONLY")
+
     def run(self, task):
-        """Run one task with a single persistent tool-using coding agent."""
-        print()
-        print("=" * 60)
-        print(" LOCAL CODEX · CODING SESSION")
-        print("=" * 60)
-        print(f" Workspace: {self.workspace}")
-        provider = str(self.config.get("provider", "groq")).lower()
+        """Architect the request, run the local agent, then escalate once if configured."""
+        self.current_task_id = uuid.uuid4().hex
+        task_started = time.monotonic()
+        self.emit_event("task.started", task=task, workspace=self.workspace)
+        self.show_status("Inspecting workspace and loading project context")
+        self.workspace_memory.refresh()
+        self.workspace_memory.record_task_start(task, self.current_task_id)
+        request_kind = classify_request(
+            task, has_history=bool(self.session_history),
+            has_project=bool(self.workspace_context.files()),
+        )
+        prior_report = dict(self.last_task_report) if self.last_task_report else {}
+        self.last_task_report = {
+            "task_id": self.current_task_id,
+            "task": task,
+            "llm_requests": [],
+            "tool_durations": [],
+        }
+        is_follow_up = bool(prior_report or self.session_history) and (
+            request_kind == "follow_up"
+            or references_existing_context(task)
+            or request_kind == "bug_report" and bool(self.session_history)
+        )
+        if not is_follow_up:
+            self.session_history.clear()
+            self.recent_tool_calls.clear()
+            prior_report = {}
+        self.task_tool_events.clear()
+        self.current_plan = []
+        provider = str(self.config.get("provider", "ollama" if self.config.get("execution_mode") == "offline" else "groq")).lower()
         if provider in {"nvidia", "nvidia_nim"}:
             model = self.config.get("nvidia_model", "qwen/qwen2.5-coder-32b-instruct")
         elif provider in {"ollama", "local"}:
             model = self.config.get("local_model", "qwen2.5-coder:1.5b")
         else:
             model = self.config.get("models", {}).get("coder", "not configured")
-        print(f" Provider : {provider}")
-        print(f" Model    : {model}")
-        print(f" Tools    : {len(self.tools)}")
-        print("-" * 60)
-
         try:
-            result = self.integrate(task, [])
+            self.show_status("Planning task and identifying deliverables")
+            specification, architect = self._architect_task(task, previous_report=prior_report)
+            specification["original_request"] = task
+            specification["workspace_path"] = self.workspace
+            specification["expected_directory"] = next(
+                (item["path"].split("/", 1)[0] for item in specification.get("expected_files", [])
+                 if isinstance(item, dict) and "/" in item.get("path", "")), None,
+            )
+            self.current_plan = list(specification.get("acceptance_criteria", [])) + [
+                item.get("path") for item in specification.get("expected_files", []) if isinstance(item, dict)
+            ]
+            self.workspace_memory.record_task_start(task, self.current_task_id, specification)
+            orchestration = {
+                "specification": specification, "architect": architect, "escalations": [],
+                "previous_task_report": prior_report,
+            }
+            try:
+                self.show_status("Implementing task")
+                result = self.integrate(task, orchestration)
+            except Exception as error:
+                previous_execution = self.last_task_report if isinstance(self.last_task_report, dict) else {}
+                self.last_task_report = {
+                    "task": task, "changed_files": [], "commands": [], "static_checks": [],
+                    "specification": specification, "architect": architect,
+                    "coder": {"provider": provider, "model": model},
+                    "escalations": [], "initial_error": f"{type(error).__name__}: {redact_secrets(str(error))}",
+                    "verification_status": "FAIL",
+                    "llm_requests": list(previous_execution.get("llm_requests", [])),
+                    "llm_attempts": list(previous_execution.get("llm_attempts", [])),
+                    "tool_durations": list(previous_execution.get("tool_durations", [])),
+                }
+                recovered_result = self._recover_car_game_after_provider_failure(
+                    task, specification, error
+                )
+                result = recovered_result or self._format_final_report(
+                    "The selected coding provider failed before implementation. No safe local recovery is available for this task; choose whether to retry the provider or explicitly select another configured provider/model."
+                )
+
+            max_escalations = max(0, min(int(self.config.get("max_escalations", 1)), 2))
+            escalation_provider = self._escalation_provider(provider)
+            if (
+                self.last_task_report.get("verification_status") != "PASS"
+                and max_escalations > 0
+                and self.config.get("hosted_coder_escalation", True)
+                and escalation_provider
+            ):
+                previous = self.last_task_report
+                context = {
+                    "task": task,
+                    "specification": specification,
+                    "files": {},
+                    "commands": previous.get("commands", [])[-6:],
+                    "static_checks": previous.get("static_checks", [])[-12:],
+                    "completeness_issues": previous.get("completeness_issues", []),
+                    "initial_error": previous.get("initial_error"),
+                }
+                read_tool = self.tools.get("read_file")
+                if read_tool:
+                    for path in previous.get("changed_files", [])[:8]:
+                        try:
+                            content = read_tool(self.workspace, path)
+                            context["files"][path] = redact_secrets(str(content)[:12000])
+                        except Exception as error:
+                            context["files"][path] = f"Unable to read changed file ({type(error).__name__})."
+                repair_context = json.dumps(context, ensure_ascii=False, default=str)[:40000]
+                self.show_status("Repairing implementation after verification failure")
+                escalation = {"provider": escalation_provider, "status": "STARTED"}
+                retry_context = dict(orchestration)
+                retry_context["repair_context"] = repair_context
+                retry_context["escalations"] = [escalation]
+                try:
+                    result = self.integrate(task, retry_context, coder_provider=escalation_provider)
+                except Exception as error:
+                    self.last_task_report = {
+                        "task": task, "changed_files": previous.get("changed_files", []),
+                        "commands": previous.get("commands", []), "static_checks": previous.get("static_checks", []),
+                        "specification": specification, "architect": architect,
+                        "coder": {"provider": escalation_provider, "model": self._model_for(escalation_provider, "coder")},
+                        "escalations": [{"provider": escalation_provider, "status": "FAILED", "error": redact_secrets(str(error))[:1200]}],
+                        "initial_error": redact_secrets(str(error))[:1200],
+                        "verification_status": "PARTIAL",
+                    }
+                    result = self._format_final_report("Hosted coder escalation failed; the task remains unverified.")
         finally:
+            if not self.last_task_report:
+                self.last_task_report = {
+                    "task_id": self.current_task_id, "task": task, "changed_files": [],
+                    "commands": [], "static_checks": [], "verification_status": "FAIL",
+                    "initial_error": "Task ended before an execution report was produced.",
+                }
+            if self.last_task_report:
+                self.last_task_report.setdefault("task_id", self.current_task_id)
+                self.last_task_report["finished_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                self.last_task_report["duration_seconds"] = time.monotonic() - task_started
+                self.last_task_report["tool_events"] = list(self.task_tool_events)
+                self.last_task_report["final_report"] = redact_secrets(str(locals().get("result", "")))[:8000]
+                self.last_task_report["source_changes"] = self._trajectory_source_changes(self.last_task_report)
+                self.workspace_memory.refresh()
+                self.workspace_memory.record_task_finish(self.last_task_report)
+            self.emit_event("workspace.memory", **self.workspace_memory.dashboard_state())
+            self.emit_event("task.report", report={
+                "verification_status": self.last_task_report.get("verification_status", "NOT VERIFIED"),
+                "commands": self.last_task_report.get("commands", []),
+                "static_checks": self.last_task_report.get("static_checks", []),
+                "completeness_issues": self.last_task_report.get("completeness_issues", []),
+                "initial_error": self.last_task_report.get("initial_error"),
+                "changed_files": self.last_task_report.get("changed_files", []),
+            })
             self.show_status("Done")
+            self.emit_event("task.finished", status=self.last_task_report.get("verification_status", "UNVERIFIED"))
         return result

@@ -13,6 +13,7 @@ class OllamaClient:
         temperature=0.1,
         max_tokens=8192,
         force_json_tools=True,
+        timeout=300,
     ):
         self.model = model
         self.temperature = temperature
@@ -21,11 +22,13 @@ class OllamaClient:
         # Small local models often emit malformed native tool calls. A strict,
         # one-action JSON protocol is easier to recover and test.
         self.force_json_tools = bool(force_json_tools)
+        self.timeout = max(1, min(float(timeout), 600))
 
         self.client = OpenAI(
             base_url=self.base_url,
             api_key="ollama",
-            timeout=300.0,
+            timeout=self.timeout,
+            max_retries=0,
         )
 
     @staticmethod
@@ -77,6 +80,22 @@ class OllamaClient:
             "unsupported tool",
         ))
 
+    def _request_error(self, error):
+        message = str(error)
+        lowered = message.lower()
+        if any(phrase in lowered for phrase in ("context length", "context window", "maximum context", "too many tokens")):
+            return RuntimeError(f"Ollama model '{self.model}' exceeded its context limit. Reduce workspace context or use a larger-context model.")
+        if "404" in lowered or "not found" in lowered or "model does not exist" in lowered:
+            return RuntimeError(
+                f"Local Ollama model '{self.model}' is not installed. "
+                "Install it separately when internet access is allowed, then retry."
+            )
+        if "connect" in lowered or "connection refused" in lowered:
+            return RuntimeError(
+                "Ollama is unavailable at the configured local endpoint. Start Ollama and verify the local service, then retry."
+            )
+        return RuntimeError(f"Ollama request failed: {message[:1200]}")
+
     def chat(self, messages, tools=None):
         kwargs = {
             "model": self.model,
@@ -92,7 +111,7 @@ class OllamaClient:
             try:
                 return self.client.chat.completions.create(**kwargs)
             except Exception as error:
-                raise RuntimeError(f"Ollama request failed: {error}") from error
+                raise self._request_error(error) from error
 
         if tools:
             kwargs["tools"] = tools
@@ -118,16 +137,4 @@ class OllamaClient:
                         f"plain-JSON fallback also failed: {fallback_error}"
                     ) from fallback_error
 
-            if "connect" in message or "connection refused" in message:
-                raise RuntimeError(
-                    "Ollama server connect nahi ho raha. "
-                    "Ollama start karke dobara try karo."
-                ) from error
-
-            if "404" in message or "not found" in message:
-                raise RuntimeError(
-                    f"Model '{self.model}' nahi mila. "
-                    f"PowerShell mein run karo: ollama pull {self.model}"
-                ) from error
-
-            raise RuntimeError(f"Ollama request failed: {error}") from error
+            raise self._request_error(error) from error

@@ -1,8 +1,9 @@
 import os
-import time
-
 from openai import OpenAI
 from dotenv import load_dotenv
+import time
+
+from agent.provider_support import credential_present, is_auth_error, is_transient, provider_error, retry_delay
 
 
 # Always load .env from the local-codex project directory
@@ -12,7 +13,7 @@ BASE_DIR = os.path.dirname(
 
 ENV_FILE = os.path.join(BASE_DIR, ".env")
 
-load_dotenv(ENV_FILE, override=True)
+load_dotenv(ENV_FILE, override=False)
 
 
 class GroqClient:
@@ -23,25 +24,28 @@ class GroqClient:
         temperature=0.1,
         max_tokens=8192,
         max_attempts=3,
-        base_delay=1.5
+        base_delay=1.5,
+        timeout=90,
+        on_retry=None,
     ):
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.max_attempts = max_attempts
-        self.base_delay = base_delay
+        self.max_attempts = max(1, min(int(max_attempts), 5))
+        self.base_delay = max(0.1, min(float(base_delay), 30))
+        self.timeout = max(1, min(float(timeout), 300))
+        self.on_retry = on_retry
 
         api_key = os.getenv("GROQ_API_KEY")
 
-        if not api_key:
-            raise RuntimeError(
-                f"GROQ_API_KEY not found.\n"
-                f"Expected .env file at:\n{ENV_FILE}"
-            )
+        if not credential_present("GROQ_API_KEY"):
+            raise RuntimeError(f"GROQ_API_KEY not found. Configure it in the project .env file: {ENV_FILE}")
 
         self.client = OpenAI(
             api_key=api_key,
-            base_url="https://api.groq.com/openai/v1"
+            base_url="https://api.groq.com/openai/v1",
+            timeout=self.timeout,
+            max_retries=0,
         )
 
     def chat(self, messages, tools=None):
@@ -57,34 +61,18 @@ class GroqClient:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
-        last_error = None
-
         for attempt in range(self.max_attempts):
-
             try:
                 return self.client.chat.completions.create(**kwargs)
-
             except Exception as error:
-
-                last_error = error
-
-                # Do not retry authentication errors
-                error_text = str(error)
-
-                if "401" in error_text or "invalid_api_key" in error_text:
-                    raise
-
-                if attempt == self.max_attempts - 1:
-                    raise
-
-                delay = self.base_delay * (2 ** attempt)
-
-                print(
-                    f"\n  [Groq retry "
-                    f"{attempt + 1}/{self.max_attempts}] "
-                    f"waiting {delay:.1f}s..."
-                )
-
+                if is_auth_error(error) or not is_transient(error) or attempt + 1 >= self.max_attempts:
+                    raise provider_error("Groq", self.model, error) from error
+                delay = retry_delay(error, attempt, self.base_delay)
+                callback = getattr(self, "on_retry", None)
+                if callback:
+                    callback(attempt + 1, self.max_attempts - 1, delay, error)
+                else:
+                    print(f"Groq temporary request error; retry {attempt + 1}/{self.max_attempts - 1} in {delay:.1f}s.")
                 time.sleep(delay)
 
-        raise last_error
+        raise RuntimeError("Groq request stopped without a response.")

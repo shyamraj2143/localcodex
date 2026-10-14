@@ -7,9 +7,11 @@ import time
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from agent.provider_support import credential_present, is_auth_error, is_transient, provider_error, retry_delay
+
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-load_dotenv(os.path.join(BASE_DIR, ".env"), override=True)
+load_dotenv(os.path.join(BASE_DIR, ".env"), override=False)
 
 
 class NvidiaClient:
@@ -21,15 +23,19 @@ class NvidiaClient:
         max_tokens=8192,
         max_attempts=3,
         base_delay=1.5,
+        timeout=180,
+        on_retry=None,
     ):
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.max_attempts = max(1, int(max_attempts))
-        self.base_delay = max(0.1, float(base_delay))
+        self.max_attempts = max(1, min(int(max_attempts), 5))
+        self.base_delay = max(0.1, min(float(base_delay), 30.0))
+        self.timeout = max(1, min(float(timeout), 300))
+        self.on_retry = on_retry
 
         api_key = os.getenv("NVIDIA_API_KEY")
-        if not api_key:
+        if not credential_present("NVIDIA_API_KEY"):
             raise RuntimeError(
                 "NVIDIA_API_KEY not found. Add it to the local-codex .env file. "
                 f"Expected file: {os.path.join(BASE_DIR, '.env')}"
@@ -38,7 +44,8 @@ class NvidiaClient:
         self.client = OpenAI(
             api_key=api_key,
             base_url=base_url.rstrip("/"),
-            timeout=180.0,
+            timeout=self.timeout,
+            max_retries=0,
         )
 
     @staticmethod
@@ -103,21 +110,16 @@ class NvidiaClient:
                     try:
                         return self.client.chat.completions.create(**fallback_kwargs)
                     except Exception as fallback_error:
-                        raise RuntimeError(
-                            "NVIDIA model rejected native tool calling and the JSON "
-                            f"fallback failed: {fallback_error}"
-                        ) from fallback_error
+                        error = fallback_error
 
-                error_text = str(error)
-                if "401" in error_text or "403" in error_text or "invalid_api_key" in error_text.lower():
-                    raise RuntimeError(
-                        "NVIDIA API authentication failed. Check NVIDIA_API_KEY in .env."
-                    ) from error
-                if attempt + 1 >= self.max_attempts:
-                    raise RuntimeError(
-                        f"NVIDIA API request failed for model '{self.model}': {error}"
-                    ) from error
+                if is_auth_error(error) or not is_transient(error) or attempt + 1 >= self.max_attempts:
+                    raise provider_error("NVIDIA", self.model, error) from error
+                delay = retry_delay(error, attempt, self.base_delay)
+                callback = getattr(self, "on_retry", None)
+                if callback:
+                    callback(attempt + 1, self.max_attempts - 1, delay, error)
+                else:
+                    print(f"NVIDIA temporary request error; retry {attempt + 1}/{self.max_attempts - 1} in {delay:.1f}s.")
+                time.sleep(delay)
 
-                time.sleep(self.base_delay * (2 ** attempt))
-
-        raise RuntimeError("NVIDIA API request failed without a response.")
+        raise RuntimeError("NVIDIA request stopped without a response.")

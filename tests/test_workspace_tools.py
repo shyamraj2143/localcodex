@@ -17,6 +17,8 @@ class WorkspaceToolTests(unittest.TestCase):
     def test_write_read_nested_file(self):
         result = write_file(self.workspace, "src/main.py", "print('hello')\n")
         self.assertTrue(result["success"])
+        self.assertEqual(result["operation"], "created")
+        self.assertEqual(result["file_state"], {"exists": True, "bytes": 15, "lines": 1})
         self.assertEqual(read_file(self.workspace, "src/main.py"), "print('hello')\n")
 
     def test_edit_requires_unique_match(self):

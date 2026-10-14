@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Local Codex execution trajectory",
+  "type": "object",
+  "required": ["schema_version", "task_id", "timestamp", "request", "category", "workspace_summary", "relevant_paths", "plan", "events", "changed_files", "tests", "verification", "final_status", "review_status"],
+  "properties": {
+    "schema_version": {"const": 1}, "task_id": {"type": "string", "minLength": 1},
+    "timestamp": {"type": "string"}, "request": {"type": "string"}, "category": {"type": "string"},
+    "workspace_summary": {"type": "string"}, "relevant_paths": {"type": "array", "items": {"type": "string"}},
+    "plan": {"type": "array"}, "events": {"type": "array", "items": {"type": "object", "required": ["tool", "arguments", "result"]}},
+    "commands": {"type": "array"}, "changed_files": {"type": "array"}, "file_changes": {"type": "array"},
+    "tests": {"type": "object", "required": ["discovered", "passed", "failed"]},
+    "verification": {"type": "object", "required": ["tests_discovered", "tests_passed", "tests_failed"]},
+    "final_status": {"enum": ["success", "partial", "failed"]}, "review_status": {"enum": ["pending", "approved", "rejected"]},
+    "review_note": {"type": "string"}, "final_report": {"type": "string"}
+  },
+  "additionalProperties": true
+}

@@ -9,6 +9,15 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
+# Local training data and experiment artifacts
+.localcodex/
+training_data/
+/training/data/**
+!/training/data/**/
+!/training/data/**/.gitkeep
+training_runs/
+checkpoints/
+
 # Virtual environments
 .venv/
 venv/

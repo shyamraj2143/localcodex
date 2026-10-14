@@ -67,15 +67,21 @@ def write_file(workspace, path, content):
 
     full_path = safe_path(workspace, path)
     os.makedirs(os.path.dirname(full_path), exist_ok=True)
+    operation = "updated" if os.path.exists(full_path) else "created"
 
     with open(full_path, "w", encoding="utf-8", newline="") as file:
         file.write(content)
 
+    stat = os.stat(full_path)
+    with open(full_path, "r", encoding="utf-8", errors="replace") as file:
+        line_count = sum(1 for _ in file)
     return {
         "success": True,
-        "message": f"Created/updated {path}",
+        "operation": operation,
+        "message": f"{operation.title()} {path}",
         "path": os.path.relpath(full_path, os.path.realpath(workspace)),
         "bytes_written": len(content.encode("utf-8")),
+        "file_state": {"exists": True, "bytes": stat.st_size, "lines": line_count},
     }
 
 
@@ -111,8 +117,13 @@ def edit_file(workspace, path, old_text, new_text):
     with open(full_path, "w", encoding="utf-8", newline="") as file:
         file.write(new_content)
 
+    stat = os.stat(full_path)
+    with open(full_path, "r", encoding="utf-8", errors="replace") as file:
+        line_count = sum(1 for _ in file)
     return {
         "success": True,
+        "operation": "edited",
         "message": f"Edited {path}",
         "path": os.path.relpath(full_path, os.path.realpath(workspace)),
+        "file_state": {"exists": True, "bytes": stat.st_size, "lines": line_count},
     }

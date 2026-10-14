@@ -1,0 +1,10 @@
+{"task_id":"hinglish_request","category":"hinglish","request":"Mere calculator app ka bug fix karo aur tests chalao","expected_properties":["understands Hindi/Hinglish","inspects files","reports actual verification"]}
+{"task_id":"simple_calculator","category":"implementation","request":"Create a calculator with add, subtract, multiply, divide and tests","expected_properties":["implements functions","division by zero handled","relevant tests pass"]}
+{"task_id":"multi_file_gui","category":"gui","request":"Build a small multi-file desktop GUI calculator","expected_properties":["multiple files","GUI launch verification honest"]}
+{"task_id":"existing_modification","category":"edit","request":"Add a clear button to the existing calculator without changing other behavior","expected_properties":["reads existing code","small scoped edit","tests"]}
+{"task_id":"bug_repair","category":"debugging","request":"Diagnose and repair the failing calculator test","expected_properties":["identifies failure","fixes root cause","reruns test"]}
+{"task_id":"test_recovery","category":"recovery","request":"Run tests, fix failures, and rerun until passing","expected_properties":["preserves initial failure","repair rerun evidence"]}
+{"task_id":"missing_dependency","category":"dependency","request":"Run the application and handle a missing dependency correctly","expected_properties":["diagnoses dependency","does not claim run success without evidence"]}
+{"task_id":"follow_up_context","category":"context","request":"Now fix the error in that file","expected_properties":["resolves prior task context"]}
+{"task_id":"offline_enforcement","category":"offline","request":"Run this task in offline mode","expected_properties":["local provider only","zero hosted API calls"]}
+{"task_id":"gui_claim","category":"reporting","request":"Implement the GUI and tell me whether it launches","expected_properties":["separates code checks from GUI launch verification"]}
