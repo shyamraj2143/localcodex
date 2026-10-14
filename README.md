@@ -1,4 +1,4 @@
-# Local Codex
+# EmiCoder
 
 A terminal-based AI coding assistant that can inspect, create, edit, and debug files in the current workspace. Supports NVIDIA NIM, Groq API models, and local Ollama models.
 
@@ -63,11 +63,11 @@ A terminal-based AI coding assistant that can inspect, create, edit, and debug f
    `ollama list` when the API returns an empty model list. It never downloads
    a model automatically.
 
-   Local mode uses plain JSON actions, readable tool feedback, duplicate-action protection, missing-deliverable checks, and retries when the model tries to finish too early. If the model repeats the same tool action three times while requested files are still missing, Local Codex switches to a constrained no-tools file-generation recovery, accepts only explicitly requested file paths, writes the files itself, and runs the most relevant available check. Hinglish folder/file requests like asking to create codex_smoke_test and put main.py inside it are included in missing-deliverable detection. After every successful source-file write/edit, Local Codex reads the file back and performs supported static checks (Python syntax, JSON syntax, and JavaScript syntax when Node.js is installed). It also records executed commands and only counts recognized test/build/lint/syntax commands as validation; a command such as `python -m pip --version` is not considered a code test. The final response includes changed files, automatic checks, commands and return codes, and an honest verification status. A task is marked PASS only when a test file was created or updated for that task and a relevant test runner demonstrably discovered and passed at least one test; syntax checks/builds alone cannot earn success. The coding prompt asks for representative inputs and edge cases (including simulated player input/state/scoring/collision tests for games). GUI logic should be tested headlessly, with a bounded GUI launch smoke check when the environment supports it. The agent must not claim it manually clicked through a GUI or played a game unless it actually did; if GUI interaction is unavailable, it must state that limitation even when headless tests pass. A small model can still have capability limits.
+   Local mode uses plain JSON actions, readable tool feedback, duplicate-action protection, missing-deliverable checks, and retries when the model tries to finish too early. If the model repeats the same tool action three times while requested files are still missing, EmiCoder switches to a constrained no-tools file-generation recovery, accepts only explicitly requested file paths, writes the files itself, and runs the most relevant available check. Hinglish folder/file requests like asking to create codex_smoke_test and put main.py inside it are included in missing-deliverable detection. After every successful source-file write/edit, EmiCoder reads the file back and performs supported static checks (Python syntax, JSON syntax, and JavaScript syntax when Node.js is installed). It also records executed commands and only counts recognized test/build/lint/syntax commands as validation; a command such as `python -m pip --version` is not considered a code test. The final response includes changed files, automatic checks, commands and return codes, and an honest verification status. A task is marked PASS only when a test file was created or updated for that task and a relevant test runner demonstrably discovered and passed at least one test; syntax checks/builds alone cannot earn success. The coding prompt asks for representative inputs and edge cases (including simulated player input/state/scoring/collision tests for games). GUI logic should be tested headlessly, with a bounded GUI launch smoke check when the environment supports it. The agent must not claim it manually clicked through a GUI or played a game unless it actually did; if GUI interaction is unavailable, it must state that limitation even when headless tests pass. A small model can still have capability limits.
 
    Coding sessions use a compact event-driven terminal dashboard: provider/model/workspace header, one live status line, a short build checklist, and a concise result. Status and checklist changes come from real tool, file, test, and task events; no fixed percentages or worker cards are shown. Set `dashboard_demo_mode` to `false` to disable beginner-friendly phrasing; set `dashboard_language` to `"english"` for English status text; set `dashboard_show_technical` to `true` for a compact technical event log. `ui_mode` remains `auto` (Rich on an interactive terminal, plain text otherwise), `rich`, or `plain`; non-interactive output uses readable plain text. Independent read-only tool calls can run concurrently; file edits and commands stay ordered. `max_parallel_tool_workers` bounds ordinary read operations (default 2); `max_concurrent_llm_requests` bounds concurrent model calls (default 1); `max_total_workers` caps the combined configured worker pools (default 3). A single Ollama generation is not made faster by adding threads. Task, model-request and tool-operation durations are recorded in the final report. The default combined worker-pool cap is 3, local model concurrency stays at 1, the task deadline is 300 seconds, and workspace context is bounded to 6,500 characters plus 1,200 characters of memory; adjust `max_total_workers`, `task_deadline_seconds`, `workspace_context_chars`, and `workspace_memory_context_chars` in `config/config.json` as needed.
 
-   Before each planning or coding request, Local Codex builds a compact context from the active workspace: ignored-file-aware inventory, manifests, README, entry points, test files, relevant source excerpts and Python definitions. It caches unchanged context and refreshes it after edits and commands, carries the previous execution report into follow-up debugging, and routes explicit explanation-only requests through a no-tools path. Start Local Codex from the project directory you want it to inspect.
+   Before each planning or coding request, EmiCoder builds a compact context from the active workspace: ignored-file-aware inventory, manifests, README, entry points, test files, relevant source excerpts and Python definitions. It caches unchanged context and refreshes it after edits and commands, carries the previous execution report into follow-up debugging, and routes explicit explanation-only requests through a no-tools path. Start EmiCoder from the project directory you want it to inspect.
 
    Install development test tools and run the full suite:
 
@@ -78,7 +78,7 @@ A terminal-based AI coding assistant that can inspect, create, edit, and debug f
 
    An optional local latency comparison is available with `.\.venv\Scripts\python.exe -m tools.benchmark_ollama`. It runs two equivalent sequential requests against the configured installed Ollama model. Add `--include-parallel` to opt into two concurrent generations; this can exhaust RAM on an 8 GB CPU-only machine. The benchmark measures response latency and failures only, not coding completion or test quality. No benchmark is run automatically.
 
-6. Start Local Codex while keeping the current directory as the workspace:
+6. Start EmiCoder while keeping the current directory as the workspace:
 
    ```powershell
    $codexRepo = (Resolve-Path "$env:USERPROFILE\src\localcodex").Path
@@ -87,9 +87,9 @@ A terminal-based AI coding assistant that can inspect, create, edit, and debug f
 
    Replace the example clone directory with your actual repository location. The portable launcher uses the repository's `.venv` Python directly when it exists; activation is not required.
 
-### Open Local Codex by typing `codex` in the terminal
+### Open EmiCoder by typing `EmiCoder` in the terminal
 
-The repository includes a portable `codex.bat`. To make `codex` available globally without committing a machine-specific path, create a user-local shim pointing to your clone:
+The repository includes `EmiCoder.bat`. To make the command available in any Command Prompt or PowerShell window, create a user-local shim:
 
 1. In PowerShell, set the actual directory where you cloned this repository:
 
@@ -97,20 +97,19 @@ The repository includes a portable `codex.bat`. To make `codex` available global
    $repo = (Resolve-Path "C:\path\to\your\localcodex").Path
    $bin = Join-Path $env:USERPROFILE "bin"
    New-Item -ItemType Directory -Force -Path $bin | Out-Null
-   "@echo off`r`ncall `"$repo\codex.bat`" %*`r`n" | Set-Content -Encoding ascii (Join-Path $bin "codex.cmd")
+   "@echo off`r`ncall `"$repo\EmiCoder.bat`" %*`r`n" | Set-Content -Encoding ascii (Join-Path $bin "EmiCoder.cmd")
    ```
 
-2. Add `$bin` (normally `%USERPROFILE%\bin`) to your **user Path** using Windows **Edit environment variables for your account** > **Path** > **New**. This adds one entry and leaves existing entries untouched.
+2. Add `%USERPROFILE%\bin` to your **user Path** using Windows **Edit environment variables for your account** > **Path** > **New**. Keep existing entries unchanged.
 3. Close and reopen Command Prompt or PowerShell.
-4. Change to the project you want Codex to work on, then run:
+4. Change to the project you want EmiCoder to work on, then run:
 
    ```powershell
    cd C:\path\to\your\project
-   codex
+   EmiCoder
    ```
 
-The shim calls the clone's launcher. It resolves `main.py` relative to the launcher, uses the repository `.venv` Python when available, and otherwise tries the Windows `py -3` launcher or `python` on `PATH`. The current folder becomes the coding workspace. Optionally set `LOCAL_CODEX_WORKSPACE` to an explicit workspace directory before launching. Ollama and the configured model must be installed for the default offline mode.
-
+The launcher uses the repository's `.venv` Python when available, otherwise tries the Windows `py -3` launcher or `python` on `PATH`. The current folder becomes the coding workspace. Ollama and the configured model must be installed for local mode. The old `codex.bat` launcher is retained for compatibility.
 ## Usage
 
 Start from PowerShell with `python "<clone-directory>\main.py"` or type `codex` after installing the user-local shim above. Startup lists the four configured provider/model choices and lets you reuse the local default. NVIDIA/Groq require explicit confirmation before leaving offline mode. Example:
@@ -123,7 +122,7 @@ Type `/help` for help or `exit` to quit. Use `/task` to enter a multi-line reque
 
 ## Persistent workspace memory
 
-On startup, Local Codex indexes the selected workspace and stores compact metadata
+On startup, EmiCoder indexes the selected workspace and stores compact metadata
 under `.localcodex/memory/`: a project summary, file index, inferred import
 relationships, discovered and executed commands, task reports, unresolved issues,
 and bounded training trajectories. Current files remain the source of truth;
@@ -151,7 +150,7 @@ Only `PASS` records become training examples. Other trajectories are written to
 ## Task planning and provider routing
 
 Complex build requests are classified before coding. In `online` or `auto` mode, when hosted access is
-enabled and a real key plus configured model are available, Local Codex asks
+enabled and a real key plus configured model are available, EmiCoder asks
 the configured Groq or NVIDIA model for a JSON implementation contract. The
 contract is schema-checked, workspace-relative paths are validated, and the
 local coding agent receives it alongside the original task. If hosted planning
@@ -218,7 +217,7 @@ defaults to one request for the 8 GB / CPU-only setup.
 - Review commands and file changes made by an AI coding agent before using them in important projects.
 # Local training data tools
 
-Local Codex includes an offline-first training-data preparation slice. It does
+EmiCoder includes an offline-first training-data preparation slice. It does
 not download datasets or models. Keep input datasets and generated artifacts
 outside your coding workspace; the default output is the ignored
 `training_data/` directory in this application repository.
@@ -255,7 +254,7 @@ run it (pytest is not installed in the checked-in virtual environment).
 
 ## Troubleshooting Windows and VS Code
 
-- If `codex` is not recognized, verify that the folder containing `codex.bat`
+- If `codex` is not recognized, verify that the folder containing `EmiCoder.bat`
   is discoverable through the user PATH, then open a new terminal. The portable
   repository launcher itself uses paths relative to its own location; a
   machine-specific global `codex.cmd` shim belongs in the user's home folder,
