@@ -1,5 +1,5 @@
 {
-    "execution_mode": "offline",
+    "execution_mode": "auto",
     "provider": "ollama",
     "ui_mode": "auto",
     "dashboard_demo_mode": true,
@@ -34,11 +34,11 @@
     "nvidia_base_url": "https://integrate.api.nvidia.com/v1",
     "nvidia_request_timeout_seconds": 45,
     "task_architect_enabled": true,
-    "architect_provider": "auto",
-    "hosted_provider_preference": "auto",
+    "architect_provider": "groq",
+    "hosted_provider_preference": "groq",
     "provider_fallback_enabled": false,
     "hosted_api_enabled": true,
-    "local_only": true,
+    "local_only": false,
     "hosted_coder_escalation": false,
     "escalation_provider": "auto",
     "max_escalations": 1,
@@ -46,5 +46,6 @@
     "persistent_memory_enabled": true,
     "training_data_collection_enabled": true,
     "workspace_memory_dir": ".localcodex/memory",
-    "workspace_memory_context_chars": 1200
+    "workspace_memory_context_chars": 1200,
+    "architect_model": "openai/gpt-oss-20b"
 }
