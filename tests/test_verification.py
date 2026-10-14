@@ -4,7 +4,7 @@ import tempfile
 import unittest
 
 from agent.verification import verify_changed_file
-from agent.loop import _is_meaningful_verification_command
+from agent.loop import _is_meaningful_verification_command, _test_run_executed, _has_passing_behavioral_tests
 
 
 class ChangedFileVerificationTests(unittest.TestCase):
@@ -42,6 +42,48 @@ class ChangedFileVerificationTests(unittest.TestCase):
         self.assertFalse(_is_meaningful_verification_command("python -m pip --version"))
         self.assertTrue(_is_meaningful_verification_command("python -m compileall -q ."))
         self.assertTrue(_is_meaningful_verification_command("npm test"))
+
+    def test_syntax_check_alone_is_not_a_successful_behavioral_test(self):
+        record = {
+            "command": "python -m py_compile main.py",
+            "success": True,
+            "return_code": 0,
+            "stdout": "",
+            "stderr": "",
+        }
+        self.assertFalse(_test_run_executed(record))
+        self.assertFalse(_has_passing_behavioral_tests([record]))
+
+    def test_zero_discovered_tests_is_not_success(self):
+        record = {
+            "command": "python -m pytest -q",
+            "success": True,
+            "return_code": 0,
+            "stdout": "no tests ran",
+            "stderr": "",
+        }
+        self.assertFalse(_test_run_executed(record))
+        self.assertFalse(_has_passing_behavioral_tests([record]))
+
+    def test_task_specific_tests_must_be_discovered_and_pass(self):
+        passing = {
+            "command": "python -m unittest -v test_calculator",
+            "success": True,
+            "return_code": 0,
+            "stdout": "Ran 5 tests in 0.02s\\n\\nOK",
+            "stderr": "",
+        }
+        failing = {
+            **passing,
+            "success": False,
+            "return_code": 1,
+            "stdout": "Ran 5 tests in 0.02s",
+            "stderr": "FAILED (failures=1)",
+        }
+        self.assertTrue(_test_run_executed(passing))
+        self.assertTrue(_has_passing_behavioral_tests([passing]))
+        self.assertFalse(_test_run_executed(failing))
+        self.assertFalse(_has_passing_behavioral_tests([failing]))
 
 
 if __name__ == "__main__":
