@@ -47,5 +47,5 @@
     "training_data_collection_enabled": true,
     "workspace_memory_dir": ".localcodex/memory",
     "workspace_memory_context_chars": 800,
-    "architect_model": "openai/gpt-oss-20b"
+    "architect_model": "openai/gpt-oss-120b"
 }
