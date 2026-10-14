@@ -438,7 +438,7 @@ def main():
             print()
             print(str(result).strip())
             report = agent.last_task_report or {}
-            if report.get("duration_seconds") is not None:
+            if config.get("dashboard_show_technical", False) and report.get("duration_seconds") is not None:
                 print(f"\n  Performance: task {report['duration_seconds']:.2f}s | "
                       f"LLM requests {len(report.get('llm_requests', []))} | "
                       f"tool operations {len(report.get('tool_durations', []))}")
