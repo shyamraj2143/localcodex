@@ -117,22 +117,33 @@ def test_offline_default_uses_discovered_model_even_if_startup_options_are_stale
 
 
 
-def test_hybrid_mode_keeps_ollama_for_coding_and_does_not_prompt_for_provider():
+def test_hybrid_mode_shows_exactly_four_coding_choices_and_defaults_to_qwen():
     config = {
         "execution_mode": "hybrid",
         "provider": "ollama",
         "local_model": "qwen2.5-coder:3b",
     }
     output = []
-    with patch.dict("os.environ", {"GROQ_API_KEY": "test-key"}):
+    with patch.dict("os.environ", {"GROQ_API_KEY": "test-key", "NVIDIA_API_KEY": "test-key"}):
         provider = choose_provider(
             config,
-            input_fn=lambda prompt: (_ for _ in ()).throw(AssertionError("hybrid mode should not prompt")),
+            input_fn=lambda prompt: "4",
             output=output.append,
-            models=["qwen2.5-coder:3b"],
+            models=["deepseek-coder:1.3b", "qwen2.5-coder:3b"],
         )
+    options = [line for line in output if line.lstrip().startswith(("[1]", "[2]", "[3]", "[4]"))]
+    assert len(options) == 4
     assert provider == "ollama"
     assert config["provider"] == "ollama"
     assert config["selected_model"] == "qwen2.5-coder:3b"
-    assert config["hosted_api_enabled"] is True
-    assert any("Groq may help interpret complex requests" in line for line in output)
+    assert config["hosted_coder_escalation"] is True
+
+
+def test_hybrid_model_menu_rejects_missing_local_deepseek_without_substitution():
+    config = {"execution_mode": "hybrid", "provider": "ollama", "local_model": "qwen2.5-coder:3b"}
+    output = []
+    with patch.dict("os.environ", {"GROQ_API_KEY": "test-key", "NVIDIA_API_KEY": "test-key"}):
+        provider = choose_provider(config, input_fn=lambda prompt: "3", output=output.append,
+                                   models=["qwen2.5-coder:3b"])
+    assert provider is None
+    assert any("not installed" in line for line in output)
