@@ -166,27 +166,27 @@ def calculator_project_files(folder="calculator"):
     base = calculator_files()
     if folder == "calculator":
         launcher = (
-            '"""Compatibility launcher for the calculator project."""\\n'
-            'from calculator.main import main\\n\\n'
-            'if __name__ == "__main__":\\n'
-            '    main()\\n'
+            '"""Compatibility launcher for the calculator project."""\n'
+            'from calculator.main import main\n\n'
+            'if __name__ == "__main__":\n'
+            '    main()\n'
         )
     else:
         launcher = (
-            '"""Launch the calculator GUI from its project folder."""\\n'
-            'import runpy\\n'
-            f"runpy.run_path({(folder + '/main.py')!r}, run_name='__main__')\\n"
+            '"""Launch the calculator GUI from its project folder."""\n'
+            'import runpy\n'
+            f"runpy.run_path({(folder + '/main.py')!r}, run_name='__main__')\n"
         )
     return {
-        f"{folder}/__init__.py": '"""Calculator application package."""\\n',
+        f"{folder}/__init__.py": '"""Calculator application package."""\n',
         f"{folder}/calculator.py": base["calculator.py"],
         f"{folder}/main.py": base["calculator_gui.py"],
         f"{folder}/test_calculator.py": base["test_calculator.py"],
         "main.py": launcher,
         f"{folder}/README.md": (
-            "# Python Calculator\\n\\nRun the GUI from the repository root with python main.py, "
-            f"or directly with python {folder}/main.py.\\n\\n"
-            f"Run tests with python -m unittest discover -s {folder} -p test_calculator.py -v.\\n"
-            "Uses only Python standard library modules (Tkinter for GUI).\\n"
+            "# Python Calculator\n\nRun the GUI from the repository root with python main.py, "
+            f"or directly with python {folder}/main.py.\n\n"
+            f"Run tests with python -m unittest discover -s {folder} -p test_calculator.py -v.\n"
+            "Uses only Python standard library modules (Tkinter for GUI).\n"
         ),
     }
