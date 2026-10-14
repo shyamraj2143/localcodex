@@ -113,7 +113,7 @@ def calculator_files():
             if __name__ == "__main__":
                 main()
         '''),
-        "tests/test_calculator.py": textwrap.dedent('''\
+        "test_calculator.py": textwrap.dedent('''\
             import unittest
 
             from calculator import add, subtract, multiply, divide
