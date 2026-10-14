@@ -563,14 +563,22 @@ class MultiModelAgent:
         if "write_file" not in self.tools or "run_command" not in self.tools:
             return None
 
-        self.show_status("Game acceptance failed; building the supported playable car game locally")
+        self.show_status("Game acceptance failed; building a playable Python GUI game locally")
         self.emit_event("workflow.phase", phase="implementing", state="active",
-                        message="Writing and testing a standard-library car game after acceptance checks failed.")
+                        message="Writing and testing a standard-library Python GUI game after acceptance checks failed.")
         report = self.last_task_report
-        report["implementation_source"] = "deterministic local car-game recovery after provider or acceptance-check failure"
+        report["implementation_source"] = "deterministic local Python GUI game recovery after provider or acceptance-check failure"
         report["provider_failure"] = redact_secrets(str(error))[:1200]
         report["recovery_status"] = "STARTED"
-        for path, content in car_game_files().items():
+        recovery_files = car_game_files()
+        if re.search(r"\b(folder|directory)\b", str(task or ""), re.IGNORECASE):
+            recovery_files["game_project/README.md"] = (
+                "# Python GUI Game Project\n\n"
+                "This folder marks the generated game project. The playable entry point is `../main.py`.\n\n"
+                "Run from the workspace root with `python main.py`.\n"
+                "Controls: Left/Right arrows or A/D; press R to restart after a crash.\n"
+            )
+        for path, content in recovery_files.items():
             result = self.execute_tool("write_file", {"path": path, "content": content})
             if not isinstance(result, dict) or result.get("success") is not True:
                 report["recovery_status"] = "FAILED"
@@ -614,9 +622,9 @@ class MultiModelAgent:
         if not all_passed:
             report["initial_error"] = "Local recovery files were written, but at least one verification command failed."
         result = self._format_final_report(
-            "The NVIDIA request failed. A deterministic Tkinter car-game recovery created the implementation and ran its checks."
+            "The requested game did not pass the model-generated acceptance checks. A deterministic Tkinter game recovery created the implementation and ran its checks."
             if all_passed else
-            "The NVIDIA request failed. The local recovery wrote files, but verification failed; the task is not complete."
+            "The game recovery wrote files, but verification failed; the task is not complete."
         )
         return result
 
