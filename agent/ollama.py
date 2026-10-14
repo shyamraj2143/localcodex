@@ -94,6 +94,12 @@ class OllamaClient:
             return RuntimeError(
                 "Ollama is unavailable at the configured local endpoint. Start Ollama and verify the local service, then retry."
             )
+        if "timeout" in lowered or "timed out" in lowered or "deadline exceeded" in lowered:
+            return RuntimeError(
+                f"Ollama model '{self.model}' timed out after {self.timeout:g}s. "
+                "The request timeout is configurable with request_timeout_seconds in config/config.json; "
+                "on a CPU-only machine, keep workspace context compact and avoid running parallel generations."
+            )
         return RuntimeError(f"Ollama request failed: {message[:1200]}")
 
     def chat(self, messages, tools=None):
