@@ -5,10 +5,16 @@ import textwrap
 
 
 def supports_car_game_recovery(task):
+    """Recognize explicit car games and underspecified new Python GUI game requests."""
     text = str(task or "").lower()
     is_car_game = re.search(r"\b(car|racing|race)\b", text) and re.search(r"\b(game|racing|race)\b", text)
     requests_python_gui = re.search(r"\b(python|gui|tkinter|window)\b", text)
-    return bool(is_car_game and requests_python_gui)
+    asks_for_game = re.search(r"\b(game|gaming)\b", text)
+    asks_to_create = re.search(r"\b(create|make|build|develop|new|banao|bana|create)\b", text)
+    # If no genre is supplied, a small deterministic playable game is a better
+    # fallback than repeatedly asking a 3B model to invent an entire project.
+    generic_python_gui_game = bool(asks_for_game and requests_python_gui and asks_to_create)
+    return bool((is_car_game and requests_python_gui) or generic_python_gui_game)
 
 
 def car_game_files():
