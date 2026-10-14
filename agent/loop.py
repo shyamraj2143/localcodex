@@ -511,7 +511,7 @@ class MultiModelAgent:
             # Human-readable summary by default; verbose telemetry stays opt-in.
             concise = [str(summary or "").strip()]
             status = report.get("verification_status", "NOT VERIFIED")
-            concise.append(f"\\nStatus: {status}")
+            concise.append(f"\nStatus: {status}")
             if changed:
                 concise.append("Files updated: " + ", ".join(changed))
             passing_tests = [
@@ -537,10 +537,10 @@ class MultiModelAgent:
                     last_failure = failed_commands[-1]
                     detail = (str(last_failure.get("stderr", "")) or str(last_failure.get("stdout", ""))).strip()
                     if detail:
-                        concise.append("Last check error: " + redact_secrets(detail[-350:]).replace("\\n", " "))
-            return redact_secrets("\\n".join(line for line in concise if line))
+                        concise.append("Last check error: " + redact_secrets(detail[-350:]).replace("\n", " "))
+            return redact_secrets("\n".join(line for line in concise if line))
 
-        return redact_secrets("\\n".join(line for line in lines if line is not None))
+        return redact_secrets("\n".join(line for line in lines if line is not None))
 
     def _missing_expected_artifacts(self, task_context):
         """Return explicitly requested relative paths that do not exist yet."""
