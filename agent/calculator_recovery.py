@@ -141,3 +141,54 @@ def calculator_files():
                 unittest.main()
         '''),
     }
+
+
+
+def supports_calculator_project(task):
+    """Recognize calculator app requests when a small model misses GUI wording."""
+    text = str(task or "").casefold()
+    if supports_calculator_gui(text):
+        return True
+    if not re.search(r"\bcalculator\b", text):
+        return False
+    return bool(re.search(
+        r"(?:calculator[/\\]main\.py|(?:folder|directory|project)\s+(?:named\s+|called\s+)?calculator|"
+        r"calculator\s+(?:folder|directory|project)|main\.py.{0,50}calculator|calculator.{0,50}main\.py)",
+        text,
+    ))
+
+
+def calculator_project_files(folder="calculator"):
+    """Return a folder-based calculator plus a root main.py compatibility launcher."""
+    folder = str(folder or "calculator").strip().strip("/\\") or "calculator"
+    if folder in {".", ".."} or any(part in {".", ".."} for part in folder.replace("\\", "/").split("/")):
+        folder = "calculator"
+    base = calculator_files()
+    package = folder.replace("/", ".").replace("\\", ".")
+    launcher = (
+        '"'"'"""Compatibility launcher for the calculator project."""
+from calculator.main import main
+
+if __name__ == "__main__":
+    main()
+'"'"'
+        if folder == "calculator" else
+        '"'"'"""Launch the calculator GUI from its project folder."""
+import runpy
+runpy.run_path('FOLDER/main.py', run_name="__main__")
+'"'"'.replace("FOLDER", folder)
+    )
+    return {
+        f"{folder}/__init__.py": '"'"'"""Calculator application package."""
+'"'"',
+        f"{folder}/calculator.py": base["calculator.py"],
+        f"{folder}/main.py": base["calculator_gui.py"],
+        f"{folder}/test_calculator.py": base["test_calculator.py"],
+        "main.py": launcher,
+        f"{folder}/README.md": (
+            "# Python Calculator\n\nRun the GUI from the repository root with python main.py, "
+            f"or directly with python {folder}/main.py.\n\n"
+            f"Run tests with python -m unittest discover -s {folder} -p test_calculator.py -v.\n"
+            "Uses only Python standard library modules (Tkinter for GUI).\n"
+        ),
+    }
