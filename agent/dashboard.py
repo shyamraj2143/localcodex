@@ -85,6 +85,7 @@ class TerminalDashboard:
         self.live = None
         self.started_at = None
         self.task = ""
+        self.current_file = ""
         self.memory = {"status": "Not indexed", "indexed_files": 0, "context_files": 0,
                        "unresolved_issues": 0, "last_task": "none", "stale": False,
                        "project_type": "unknown", "task_context_status": "unknown"}
@@ -193,6 +194,7 @@ class TerminalDashboard:
         self.unresolved_issues.clear()
         self.last_error = ""
         self.created_folders.clear()
+        self.current_file = ""
         self.gui_status = "Not recorded"
         self.verification_status = "Not verified"
         self._set_activity("Understanding your request", reason="The agent begins by identifying the requested outcome.")
@@ -295,6 +297,8 @@ class TerminalDashboard:
 
     def _handle_file(self, event):
         path = str(event.get("path", ""))
+        if path:
+            self.current_file = path.replace("\\\\", "/")
         action = str(event.get("action", "read"))
         if action == "folder_created":
             self.created_folders.add(path)
@@ -416,28 +420,95 @@ class TerminalDashboard:
     def _render(self):
         if not self.rich_enabled:
             return self.activity
+
         project = os.path.basename(os.path.normpath(self.workspace)) or self.workspace
-        header = Text.assemble(("LOCAL CODEX", "bold cyan"),
-                               (f"  {self.provider} / {self.model}  {self.execution_mode}", ""),
-                               (f"  {project}: {self.workspace}", "dim"))
-        rows = Table.grid(padding=(0, 1))
+        header = Table.grid(expand=True, padding=(0, 1))
+        header.add_column(width=3)
+        header.add_column(ratio=1)
+        header.add_column(justify="right")
+        header.add_row(
+            Text("▣", style="bold bright_cyan"),
+            Group(
+                Text("LOCAL CODEX", style="bold white"),
+                Text(f"{self.provider.title()} · {self.model} · {self.execution_mode.title()}", style="dim"),
+            ),
+            Text(self._build_badge(), style=f"bold {self._build_badge_style()}"),
+        )
+
+        title = Text(self._say("What's happening?", "अभी क्या हो रहा है?"), style="bright_cyan")
+        task = Text(self._task_headline(), style="bold white")
+        rows = Table.grid(expand=True, padding=(0, 1))
         rows.add_column(width=3)
-        rows.add_column()
-        for label, state in self._checklist():
-            mark = "✓" if state == "done" else "!" if state == "failed" else "·" if state == "active" else "○"
-            rows.add_row(mark, label)
-        # Keep the main screen student-friendly: one live action, a short
-        # build checklist, and the truthful final result. Detailed phases and
-        # event traces remain available only in the optional debug log.
-        body = Group(Text(self.activity, style="bold white"), rows,
-                     Text(f"Result: {self._result_label()}", style="bold"))
+        rows.add_column(ratio=1)
+        rows.add_column(justify="right")
+        for label, state in self._visual_checklist():
+            mark = "✓" if state == "done" else "!" if state == "failed" else "◉" if state == "active" else "●" if state == "skipped" else "○"
+            style = {"done": "bright_cyan", "active": "bright_cyan", "failed": "red", "skipped": "dim", "pending": "dim"}.get(state, "white")
+            status = "Done" if state == "done" else "Running" if state == "active" else "Failed" if state == "failed" else "Skipped" if state == "skipped" else ""
+            rows.add_row(Text(mark, style=style), Text(label, style="white" if state != "pending" else "dim"),
+                         Text(status, style=style))
+
+        body_items = [title, Text(""), task, Text(""), rows, Text("")]
+        if self.current_file:
+            body_items.extend([
+                Text("─" * 48, style="dim"),
+                Text("‹/›  Current file: ", style="bright_cyan") + Text(self.current_file, style="bold white on grey15"),
+            ])
+        body_items.extend([Text(""), Text(f"Result: {self._result_label()}", style="bold")])
         if self.last_error:
-            body = Group(body, Text(f"Issue / recovery: {self.last_error[:180]}", style="yellow"))
-        sections = [header, Panel(body, title="Build", border_style="cyan")]
+            body_items.extend([Text(""), Text(f"Issue / recovery: {self.last_error[:180]}", style="yellow")])
+        body = Group(*body_items)
+        sections = [
+            header,
+            Panel(body, border_style="grey30", padding=(1, 1), expand=True),
+        ]
         if self.show_technical and self.technical_log:
             sections.append(Panel("\n".join(self._escape(line) for line in self.technical_log[-6:]),
                                   title="Debug log", border_style="white"))
         return Group(*sections)
+
+    def _build_badge(self):
+        if self.task_status.startswith("Finished"):
+            return "FAILED" if self.verification_status in {"Failed", "Blocked"} else "DONE"
+        if self.started_at is not None:
+            return "BUILDING"
+        return "READY"
+
+    def _build_badge_style(self):
+        badge = self._build_badge()
+        return "red" if badge == "FAILED" else "bright_green" if badge in {"BUILDING", "DONE"} else "dim"
+
+    def _task_headline(self):
+        if self.task_status.startswith("Finished"):
+            return self._say("Task finished.", "Kaam poora hua.")
+        if self.workflow.get("testing") == "active":
+            return self._say("Application test is running…", "Application test chal raha hai…")
+        if self.workflow.get("repairing") == "active":
+            return self._say("Error fix kar raha hoon…", "Error fix kar raha hoon…")
+        if self.current_file and self.workflow.get("implementing") == "active":
+            return self._say(f"Writing code in {self.current_file}…", f"{self.current_file} mein code likh raha hoon…")
+        return self.activity or self._say("Ready for your task.", "Aapke task ke liye ready hoon.")
+
+    def _visual_checklist(self):
+        base = dict(self._checklist())
+        changed_python = any(
+            path.lower().endswith((".py", ".pyw"))
+            and any(action in {"created", "modified", "modified via command"} for action in item["actions"])
+            for path, item in self.files.items()
+        )
+        writing = self.workflow.get("implementing") == "active"
+        testing = next((item for item in reversed(self.commands)
+                        if any(word in item["command"].lower() for word in ("pytest", "unittest", "test", "python "))), None)
+        test_state = "done" if testing and testing["status"] == "passed" else "failed" if testing and testing["status"] == "failed" else "active" if self.workflow.get("testing") == "active" else "pending"
+        folder_state = "done" if base.get("Project folder: created") == "done" else "active" if self.workflow.get("implementing") == "active" else "pending"
+        python_state = "done" if changed_python else "active" if writing and self.current_file.lower().endswith((".py", ".pyw")) else "pending"
+        code_state = "done" if changed_python and self.verification_status == "Verified" else "failed" if self.workflow.get("implementing") == "failed" else "active" if writing or changed_python else "pending"
+        return [
+            (self._say("Project folder banao", "Project folder banaya"), folder_state),
+            (self._say("Python files banao", "Python files banाईं"), python_state),
+            (self._say("Code likh raha hoon", "Code likh raha hoon"), code_state),
+            (self._say("Application test kar raha hoon", "Application test kar raha hoon"), test_state),
+        ]
 
     def _checklist(self):
         changed = [item for item in self.files.values() if any(action in {"created", "modified", "modified via command", "deleted"} for action in item["actions"])]
@@ -479,6 +550,8 @@ class TerminalDashboard:
 
     def _tool_description(self, tool, arguments, old_label):
         path = str(arguments.get("path", "")) if isinstance(arguments, dict) else ""
+        if path and tool in {"write_file", "edit_file", "read_file"}:
+            self.current_file = path.replace("\\\\", "/")
         query = str(arguments.get("query", "")) if isinstance(arguments, dict) else ""
         command = str(arguments.get("command", "")) if isinstance(arguments, dict) else ""
         hinglish = self.demo_mode and self.language == "hinglish"
