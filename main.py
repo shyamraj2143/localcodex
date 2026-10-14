@@ -73,6 +73,19 @@ def load_config():
     if mode not in {"offline", "online", "auto"}:
         raise ValueError("execution_mode must be one of: offline, online, auto")
     config["execution_mode"] = mode
+
+    # Optional local-model overrides live in each machine's untracked .env.
+    # Accept either an Ollama server root or its OpenAI-compatible /v1 URL.
+    ollama_host = os.getenv("OLLAMA_HOST", "").strip().rstrip("/")
+    if ollama_host:
+        config["ollama_base_url"] = ollama_host if ollama_host.endswith("/v1") else ollama_host + "/v1"
+    ollama_model = os.getenv("OLLAMA_MODEL", "").strip()
+    if ollama_model:
+        config["local_model"] = ollama_model
+        options = config.get("startup_local_model_options", [])
+        if isinstance(options, list) and ollama_model not in options:
+            config["startup_local_model_options"] = [ollama_model, *options]
+
     # Protect against accidentally huge token limits.
     token_limit = config.get("max_tokens", 8192)
     if not isinstance(token_limit, int) or token_limit < 1:
