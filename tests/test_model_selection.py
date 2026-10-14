@@ -114,3 +114,25 @@ def test_offline_default_uses_discovered_model_even_if_startup_options_are_stale
     assert provider == "ollama"
     assert config["selected_model"] == "qwen2.5-coder:3b"
     assert any("qwen2.5-coder:3b" in line for line in output)
+
+
+
+def test_hybrid_mode_keeps_ollama_for_coding_and_does_not_prompt_for_provider():
+    config = {
+        "execution_mode": "hybrid",
+        "provider": "ollama",
+        "local_model": "qwen2.5-coder:3b",
+    }
+    output = []
+    with patch.dict("os.environ", {"GROQ_API_KEY": "test-key"}):
+        provider = choose_provider(
+            config,
+            input_fn=lambda prompt: (_ for _ in ()).throw(AssertionError("hybrid mode should not prompt")),
+            output=output.append,
+            models=["qwen2.5-coder:3b"],
+        )
+    assert provider == "ollama"
+    assert config["provider"] == "ollama"
+    assert config["selected_model"] == "qwen2.5-coder:3b"
+    assert config["hosted_api_enabled"] is True
+    assert any("Groq may help interpret complex requests" in line for line in output)
