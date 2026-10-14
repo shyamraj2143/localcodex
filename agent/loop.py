@@ -2135,6 +2135,12 @@ Workspace root is the current directory. Keep file operations inside it.
         else:
             model = self.config.get("models", {}).get("coder", "not configured")
         try:
+            # Common calculator requests are deterministic and need no LLM planning.
+            # This avoids repeated low-information tool calls from tiny local models.
+            if supports_calculator_gui(task):
+                result = self._recover_calculator_gui_task(task)
+                return result
+
             self.show_status("Planning task and identifying deliverables")
             specification, architect = self._architect_task(task, previous_report=prior_report)
             specification["original_request"] = task
