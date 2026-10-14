@@ -147,3 +147,25 @@ def test_hybrid_model_menu_rejects_missing_local_deepseek_without_substitution()
                                    models=["qwen2.5-coder:3b"])
     assert provider is None
     assert any("not installed" in line for line in output)
+
+
+
+def test_hybrid_menu_selects_groq_coding_model_when_key_is_present():
+    config = {"execution_mode": "hybrid", "provider": "ollama", "models": {"coder": "old-model"}}
+    with patch.dict("os.environ", {"GROQ_API_KEY": "test-key", "NVIDIA_API_KEY": ""}):
+        provider = choose_provider(config, input_fn=lambda prompt: "2", output=lambda value: None,
+                                   models=["deepseek-coder:1.3b", "qwen2.5-coder:3b"])
+    assert provider == "groq"
+    assert config["execution_mode"] == "online"
+    assert config["models"]["coder"] == "qwen/qwen3.8-27b"
+    assert config["hosted_coder_escalation"] is False
+
+
+def test_hybrid_menu_selects_nvidia_coding_model_when_key_is_present():
+    config = {"execution_mode": "hybrid", "provider": "ollama", "nvidia_model": "old-model"}
+    with patch.dict("os.environ", {"GROQ_API_KEY": "", "NVIDIA_API_KEY": "test-key"}):
+        provider = choose_provider(config, input_fn=lambda prompt: "1", output=lambda value: None,
+                                   models=["deepseek-coder:1.3b", "qwen2.5-coder:3b"])
+    assert provider == "nvidia"
+    assert config["execution_mode"] == "online"
+    assert config["nvidia_model"] == "qwen/qwen2.5-coder-32b-instruct"
