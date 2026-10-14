@@ -44,7 +44,7 @@ class UI:
     @classmethod
     def header(cls, workspace, provider, model, tool_count, execution_mode="OFFLINE", worker_count=0):
         project = os.path.basename(os.path.normpath(workspace)) or workspace
-        print(cls.color("LOCAL CODEX", cls.BOLD + cls.CYAN)
+        print(cls.color("EMICODER", cls.BOLD + cls.CYAN)
               + f"  {provider.upper()} / {model}  [{execution_mode.upper()}]")
         print(f"Workspace: {project} ({workspace})\n")
 
@@ -176,7 +176,7 @@ def simple_reply(text):
 
     if normalized in greetings:
         return (
-            "Hey! 👋 I'm Local Codex.\n\n"
+            "Hey! 👋 I'm EmiCoder.\n\n"
             "I can help you inspect, create, debug and improve code.\n"
             "Tell me what you want to build."
         )
@@ -185,7 +185,7 @@ def simple_reply(text):
         return "You're welcome! 😊 What would you like to work on next?"
 
     if normalized in {"bye", "goodbye", "see you"}:
-        return "See you! 👋 Type 'exit' whenever you want to close Codex."
+        return "See you! 👋 Type 'exit' whenever you want to close EmiCoder."
 
     if normalized in {"help", "/help"}:
         return (
@@ -306,7 +306,7 @@ def main():
     if not agent.workspace_memory.enabled:
         UI.info(f"Workspace memory: {agent.workspace_memory.status}")
 
-    UI.success("Codex is ready.")
+    UI.success("EmiCoder is ready.")
     print("  Type /help for help or exit to quit.\n")
 
     while True:
