@@ -563,11 +563,11 @@ class MultiModelAgent:
         if "write_file" not in self.tools or "run_command" not in self.tools:
             return None
 
-        self.show_status("NVIDIA failed; creating the requested car game with the bounded local recovery")
+        self.show_status("Game acceptance failed; building the supported playable car game locally")
         self.emit_event("workflow.phase", phase="implementing", state="active",
-                        message="Writing a standard-library car game after the selected provider failed.")
+                        message="Writing and testing a standard-library car game after acceptance checks failed.")
         report = self.last_task_report
-        report["implementation_source"] = "deterministic local car-game recovery after selected provider failure"
+        report["implementation_source"] = "deterministic local car-game recovery after provider or acceptance-check failure"
         report["provider_failure"] = redact_secrets(str(error))[:1200]
         report["recovery_status"] = "STARTED"
         for path, content in car_game_files().items():
@@ -578,7 +578,7 @@ class MultiModelAgent:
                     result.get("error", "unknown file-tool error") if isinstance(result, dict) else result
                 )
                 report["verification_status"] = "FAIL"
-                return self._format_final_report("The selected provider failed and the local game recovery could not write all files.")
+                return self._format_final_report("The game failed acceptance checks and the local recovery could not write all files.")
             if path not in report.setdefault("changed_files", []):
                 report["changed_files"].append(path)
             report.setdefault("static_checks", []).append(verify_changed_file(self.workspace, path))
@@ -2203,10 +2203,20 @@ Workspace root is the current directory. Keep file operations inside it.
                     or architect_status in {"FAILED", "FAIL", "ERROR"}
                     or coder_status in {"FAILED", "FAIL", "ERROR"}
                 )
-                if completed_report.get("verification_status") != "PASS" and failure_evidence:
+                if completed_report.get("verification_status") != "PASS" and (
+                    failure_evidence or supports_car_game_recovery(task)
+                ):
+                    # For the explicitly supported car-racing task, failed gameplay
+                    # acceptance checks are enough to trigger the deterministic
+                    # implementation; waiting for an HTTP/provider error left
+                    # placeholder games untouched.
                     failure = (
                         (failed_requests[-1].get("error") if failed_requests else None)
                         or completed_report.get("initial_error")
+                        or (
+                            "Game acceptance checks failed: "
+                            + "; ".join(completed_report.get("completeness_issues", []))
+                        )
                         or f"Provider task failed (architect={architect_status or 'unknown'}, coder={coder_status or 'unknown'})."
                     )
                     recovered_result = self._recover_car_game_after_provider_failure(
