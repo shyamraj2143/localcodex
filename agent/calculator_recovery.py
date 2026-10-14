@@ -182,7 +182,7 @@ def calculator_project_files(folder="calculator"):
             f"runpy.run_path({(folder + '/main.py')!r}, run_name='__main__')\n"
         )
     return {
-        f"{folder}/__init__.py": '"""Calculator application package."""\n',
+        f"{folder}/__init__.py": '"""Calculator application package."""\nfrom .calculator import add, subtract, multiply, divide\n',
         f"{folder}/calculator.py": base["calculator.py"],
         f"{folder}/main.py": gui,
         f"{folder}/test_calculator.py": base["test_calculator.py"],
