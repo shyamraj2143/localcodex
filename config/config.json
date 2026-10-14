@@ -3,7 +3,7 @@
     "provider": "ollama",
     "ui_mode": "auto",
     "dashboard_demo_mode": true,
-    "dashboard_language": "english",
+    "dashboard_language": "hinglish",
     "dashboard_show_technical": false,
     "local_model": "qwen2.5-coder:3b",
     "startup_local_model_options": [
