@@ -1,2 +1,2 @@
 @echo off
-python "F:\projects\local-codex\main.py" %*
+python "%~dp0main.py" %*

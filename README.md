@@ -79,6 +79,29 @@ A terminal-based AI coding assistant that can inspect, create, edit, and debug f
 
    Replace that path with the actual location where you cloned this repository. The current working directory becomes the agent's workspace.
 
+### Open Local Codex by typing `codex` in the terminal
+
+The repository includes `codex.bat`, a Windows launcher. Add the folder containing
+`codex.bat` (the cloned `localcodex` folder) to your **user Path**:
+
+1. Open Windows **Edit environment variables for your account**.
+2. Under **User variables**, select **Path** → **Edit** → **New**.
+3. Add the full path to the cloned repository, for example
+   `F:\projects\local-codex`, then save the dialogs.
+4. Close and reopen Command Prompt or PowerShell so it reloads Path.
+5. Change to the project you want Local Codex to work on, then run:
+
+   ```powershell
+   cd F:\projects\app\assignment
+   codex
+   ```
+
+The launcher starts this repository's `main.py` while keeping the current folder
+as the agent's workspace. Keep the virtual environment from step 2 activated
+when using `codex`, or install the requirements into the Python environment
+used by the `python` command. Ollama and the selected model must also be
+installed for the default offline configuration.
+
 ## Usage
 
 Start from PowerShell with `py F:\projects\local-codex\main.py` (or run `python main.py` from the repository). Startup lists the four configured provider/model choices and lets you reuse the local default. NVIDIA/Groq require explicit confirmation before leaving offline mode. Example:
