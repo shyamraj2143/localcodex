@@ -70,8 +70,8 @@ def load_config():
         config = json.load(file)
 
     mode = str(config.get("execution_mode", "auto")).strip().lower()
-    if mode not in {"offline", "online", "auto"}:
-        raise ValueError("execution_mode must be one of: offline, online, auto")
+    if mode not in {"offline", "online", "auto", "hybrid"}:
+        raise ValueError("execution_mode must be one of: offline, online, auto, hybrid")
     config["execution_mode"] = mode
 
     # Optional local-model overrides live in each machine's untracked .env.
