@@ -21,7 +21,7 @@ from types import SimpleNamespace
 from agent.groq import GroqClient
 from agent.context import WorkspaceContextManager
 from agent.game_recovery import car_game_files, supports_car_game_recovery
-from agent.calculator_recovery import calculator_files, supports_calculator_gui
+from agent.calculator_recovery import calculator_files, calculator_project_files, supports_calculator_gui, supports_calculator_project
 from agent.nvidia import NvidiaClient
 from agent.ollama import OllamaClient
 from agent.orchestration import completeness_issues, fallback_specification, parse_specification, redact_secrets
@@ -621,71 +621,47 @@ class MultiModelAgent:
         return result
 
     def _recover_calculator_gui_task(self, task):
-        """Implement common arithmetic GUI requests without burning small-model tool steps."""
+        """Build and verify a deterministic calculator in the requested project layout."""
         report = self.last_task_report
+        folder_match = re.search(r"(?:folder|directory|project)\\s+(?:named\\s+|called\\s+)?([a-zA-Z][a-zA-Z0-9_-]*)", str(task or ""), re.IGNORECASE)
+        folder = folder_match.group(1) if folder_match and folder_match.group(1).lower() in {"calculator", "calc"} else "calculator"
+        files = calculator_project_files(folder)
         report.update({
-            "task": task,
-            "changed_files": [],
-            "commands": [],
-            "static_checks": [],
-            "specification": None,
+            "task": task, "changed_files": [], "commands": [], "static_checks": [], "specification": None,
             "architect": {"provider": "none", "model": "none", "status": "SKIPPED (deterministic calculator task)"},
             "coder": {"provider": "local recovery", "model": "Python standard library"},
-            "implementation_source": "deterministic Tkinter calculator recovery",
+            "implementation_source": "deterministic folder-aware Tkinter calculator recovery",
         })
-        self.show_status("Building the requested calculator with a standard-library recovery")
-        files = calculator_files()
+        self.show_status("Building the calculator project and writing its exact entry-point paths")
         for path, content in files.items():
             written = self.execute_tool("write_file", {"path": path, "content": content})
             if not isinstance(written, dict) or written.get("success") is not True:
-                report["initial_error"] = f"Could not write {path}: " + str(
-                    written.get("error", "unknown file tool error") if isinstance(written, dict) else written
-                )
+                report["initial_error"] = f"Could not write {path}: " + str(written.get("error", "unknown file tool error") if isinstance(written, dict) else written)
                 report["verification_status"] = "FAIL"
                 return self._format_final_report("Calculator recovery failed while writing source files.")
             if path not in report["changed_files"]:
                 report["changed_files"].append(path)
             report["static_checks"].append(verify_changed_file(self.workspace, path))
-
         commands = [
-            f'"{sys.executable}" -m py_compile calculator.py calculator_gui.py test_calculator.py',
-            f'"{sys.executable}" -m unittest -v test_calculator',
+            f'"{sys.executable}" -m py_compile main.py "{folder}/main.py" "{folder}/calculator.py" "{folder}/test_calculator.py"',
+            f'"{sys.executable}" -m unittest discover -s "{folder}" -p "test_calculator.py" -v',
         ]
         for command in commands:
             outcome = self.execute_tool("run_command", {"command": command})
             outcome = outcome if isinstance(outcome, dict) else {"success": False, "stderr": str(outcome)}
-            record = {
-                "command": command,
-                "cwd": outcome.get("cwd", self.workspace),
-                "duration_seconds": outcome.get("duration_seconds"),
-                "timed_out": outcome.get("timed_out", False),
-                "return_code": outcome.get("return_code"),
-                "success": outcome.get("success") is True and outcome.get("return_code") == 0,
-                "stdout": outcome.get("stdout", ""),
-                "stderr": outcome.get("stderr", ""),
-                "meaningful_check": True,
-            }
+            record = {"command": command, "cwd": outcome.get("cwd", self.workspace), "duration_seconds": outcome.get("duration_seconds"), "timed_out": outcome.get("timed_out", False), "return_code": outcome.get("return_code"), "success": outcome.get("success") is True and outcome.get("return_code") == 0, "stdout": outcome.get("stdout", ""), "stderr": outcome.get("stderr", ""), "meaningful_check": True}
             record["test_counts"] = _test_counts(command, record["stdout"], record["stderr"])
             record["executed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
             report["commands"].append(record)
             self.emit_event("verification", message=f"{command} — {'PASS' if record['success'] else 'FAIL'}")
-
         checks_pass = all(item.get("success") for item in report["static_checks"])
-        command_pass = bool(report["commands"]) and all(
-            item.get("success") and item.get("return_code") == 0 for item in report["commands"]
-        )
-        report["verification_status"] = "PASS" if checks_pass and command_pass else "PARTIAL"
-        if not command_pass:
-            report["initial_error"] = (
-                "The calculator source was generated, but one or more local verification commands failed. "
-                "Review the exact command output below; no external package is required for arithmetic tests."
-            )
-        summary = (
-            "Created a working Tkinter calculator with addition, subtraction, multiplication, division, "
-            "input validation, clear button, and standard-library unit tests."
-            if report["verification_status"] == "PASS" else
-            "Created the calculator files, but verification did not fully pass; see the recorded command output."
-        )
+        command_pass = bool(report["commands"]) and all(item.get("success") and item.get("return_code") == 0 for item in report["commands"])
+        test_recorded = any(_test_run_executed(item) for item in report["commands"])
+        report["verification_status"] = "PASS" if checks_pass and command_pass and test_recorded else "PARTIAL"
+        report["behavioral_tests_pass"] = test_recorded
+        if not command_pass or not test_recorded:
+            report["initial_error"] = "Calculator files were generated, but compile/test verification failed or discovered no tests. Review command output below."
+        summary = (f"Created the calculator project in {folder}/ with a root main.py launcher, GUI arithmetic operations, input validation, clear button, and unit tests." if report["verification_status"] == "PASS" else "Created calculator files, but verification did not fully pass; see command output.")
         return self._format_final_report(summary)
 
     def _generate_missing_files_locally(self, client, task_context, expected_paths):
@@ -2162,7 +2138,7 @@ Workspace root is the current directory. Keep file operations inside it.
         try:
             # Common calculator requests are deterministic and need no LLM planning.
             # This avoids repeated low-information tool calls from tiny local models.
-            if supports_calculator_gui(task):
+            if supports_calculator_project(task):
                 result = self._recover_calculator_gui_task(task)
                 return result
 
