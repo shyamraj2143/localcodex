@@ -507,7 +507,40 @@ class MultiModelAgent:
                 + redact_secrets(str(item.get("error", "No error detail returned.")))[:900]
             )
         lines.extend("- Acceptance check FAIL: " + issue for issue in spec_issues)
-        return redact_secrets("\n".join(line for line in lines if line is not None))
+        if not self.config.get("dashboard_show_technical", False):
+            # Human-readable summary by default; verbose telemetry stays opt-in.
+            concise = [str(summary or "").strip()]
+            status = report.get("verification_status", "NOT VERIFIED")
+            concise.append(f"\\nStatus: {status}")
+            if changed:
+                concise.append("Files updated: " + ", ".join(changed))
+            passing_tests = [
+                item.get("test_counts", {})
+                for item in commands
+                if item.get("success") and item.get("test_counts", {}).get("discovered") is not None
+            ]
+            if passing_tests:
+                latest_tests = passing_tests[-1]
+                concise.append(f"Tests: {latest_tests.get('passed', 0)}/{latest_tests.get('discovered', 0)} passed")
+            elif status != "PASS":
+                concise.append("Tests: not confirmed as passing")
+            if status != "PASS":
+                if missing_artifacts:
+                    concise.append("Missing files: " + ", ".join(missing_artifacts))
+                if report.get("initial_error"):
+                    concise.append("Issue: " + redact_secrets(str(report["initial_error"]))[:350])
+                failed_commands = [
+                    item for item in commands
+                    if not item.get("success") or item.get("return_code") != 0
+                ]
+                if failed_commands:
+                    last_failure = failed_commands[-1]
+                    detail = (str(last_failure.get("stderr", "")) or str(last_failure.get("stdout", ""))).strip()
+                    if detail:
+                        concise.append("Last check error: " + redact_secrets(detail[-350:]).replace("\\n", " "))
+            return redact_secrets("\\n".join(line for line in concise if line))
+
+        return redact_secrets("\\n".join(line for line in lines if line is not None))
 
     def _missing_expected_artifacts(self, task_context):
         """Return explicitly requested relative paths that do not exist yet."""
