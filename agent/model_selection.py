@@ -139,6 +139,8 @@ def choose_provider(config, input_fn=input, output=print, models=None):
             config["nvidia_model"] = selected_model
             config["hosted_coder_escalation"] = False
         else:
+            config["local_only"] = False
+            config["hosted_api_enabled"] = True
             config["execution_mode"] = "online"
             config.setdefault("models", {})["coder"] = selected_model
             config["hosted_coder_escalation"] = False
