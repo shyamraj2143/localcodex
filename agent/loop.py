@@ -2138,7 +2138,7 @@ Workspace root is the current directory. Keep file operations inside it.
                     task, specification, error
                 )
                 result = recovered_result or self._format_final_report(
-                    "The selected coding provider failed before implementation. No safe local recovery is available for this task; choose whether to retry the provider or explicitly select another configured provider/model."
+                    "The selected coding provider failed before implementation. No verified implementation is available yet, and this task is NOT marked complete. Check the provider API key/model or restart and select another of the four configured coding models."
                 )
 
             max_escalations = max(0, min(int(self.config.get("max_escalations", 1)), 2))
