@@ -92,7 +92,7 @@ def choose_provider(config, input_fn=input, output=print, models=None):
         # until the corresponding key is configured.
         choices = [
             ("nvidia", "qwen/qwen2.5-coder-32b-instruct", "NVIDIA coding model", "NVIDIA_API_KEY"),
-            ("groq", "qwen/qwen3-32b", "Groq coding model", "GROQ_API_KEY"),
+            ("groq", "qwen/qwen3.8-27b", "Groq coding model", "GROQ_API_KEY"),
             ("ollama", "deepseek-coder:1.3b", "DeepSeek local model", None),
             ("ollama", "qwen2.5-coder:3b", "Qwen2.5-Coder 3B local model", None),
         ]
