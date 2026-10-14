@@ -623,7 +623,7 @@ class MultiModelAgent:
     def _recover_calculator_gui_task(self, task):
         """Build and verify a deterministic calculator in the requested project layout."""
         report = self.last_task_report
-        folder_match = re.search(r"(?:folder|directory|project)\\s+(?:named\\s+|called\\s+)?([a-zA-Z][a-zA-Z0-9_-]*)", str(task or ""), re.IGNORECASE)
+        folder_match = re.search(r"(?:folder|directory|project)\s+(?:named\s+|called\s+)?([a-zA-Z][a-zA-Z0-9_-]*)", str(task or ""), re.IGNORECASE)
         folder = folder_match.group(1) if folder_match and folder_match.group(1).lower() in {"calculator", "calc"} else "calculator"
         files = calculator_project_files(folder)
         report.update({
