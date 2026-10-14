@@ -178,8 +178,17 @@ def _test_run_executed(record):
         return bool(re.search(r"\b[1-9]\d*\s+(?:passing|passed|tests? passed)\b", output))
     return False
 
-def _has_passing_behavioral_tests(commands):
-    """Only count a task as verified after a test runner actually ran tests successfully."""
+def _has_passing_behavioral_tests(commands, changed_files=None):
+    """Require passing tests plus a test file created/updated as part of this task."""
+    changed_files = changed_files or []
+    changed_test_file = any(
+        re.search(r"(?:^|/|\\\\)(?:tests?/.*|test_[^/\\\\]+|[^/\\\\]+_test)\\.(?:py|js|jsx|ts|tsx|mjs|cjs)$",
+                  str(path).replace("\\\\", "/").lower())
+        or re.search(r"(?:^|/)tests?/", str(path).replace("\\\\", "/").lower())
+        for path in changed_files
+    )
+    if not changed_test_file:
+        return False
     return any(_test_run_executed(item) for item in commands if isinstance(item, dict))
 
 
@@ -428,7 +437,7 @@ class MultiModelAgent:
             meaningful and meaningful[-1].get("success")
             and meaningful[-1].get("return_code") == 0
         )
-        behavioral_tests_pass = _has_passing_behavioral_tests(commands)
+        behavioral_tests_pass = _has_passing_behavioral_tests(commands, changed)
         report["behavioral_tests_pass"] = behavioral_tests_pass
         static_pass = all(item.get("success") for item in latest_checks.values())
         missing_artifacts = self._missing_expected_artifacts(report.get("task", ""))
