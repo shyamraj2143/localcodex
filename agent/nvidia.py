@@ -37,7 +37,7 @@ class NvidiaClient:
         api_key = os.getenv("NVIDIA_API_KEY")
         if not credential_present("NVIDIA_API_KEY"):
             raise RuntimeError(
-                "NVIDIA_API_KEY not found. Add it to the local-codex .env file. "
+                "NVIDIA_API_KEY not found. Add it to the EmiCoder .env file. "
                 f"Expected file: {os.path.join(BASE_DIR, '.env')}"
             )
 

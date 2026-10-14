@@ -1,4 +1,4 @@
-# Local Codex training data pipeline
+# EmiCoder training data pipeline
 
 All collection and preparation runs locally with the project's Python environment. No model training, checkpoint download, hosted API, or network access is needed. Task reports are appended best effort to `training/data/raw/trajectories.jsonl`; each workspace also retains the last 30 records in `.localcodex/memory/trajectories.jsonl`. Tool events contain bounded, redacted arguments/results. `.env`, environment variables and secret-named paths are excluded. Review sanitized records before approval: redaction is defense in depth.
 

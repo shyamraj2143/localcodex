@@ -428,7 +428,7 @@ class WorkspaceMemory:
             output = (str(record.get("stdout", "")) + "\n" + str(record.get("stderr", ""))).strip()
             if output:
                 safe["summary"] = redact_secrets(output[-800:])
-            safe["purpose"] = "Executed by Local Codex"
+            safe["purpose"] = "Executed by EmiCoder"
             safe["source"] = "executed"
             items = self._data["commands"].setdefault("items", [])
             items.append(safe)

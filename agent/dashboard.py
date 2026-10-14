@@ -207,7 +207,7 @@ class TerminalDashboard:
             self.live.start()
         elif not self.rich_enabled:
             project = os.path.basename(os.path.normpath(self.workspace)) or self.workspace
-            print(f"\nLOCAL CODEX | {self.provider} / {self.model} | {self.execution_mode}\nWorkspace: {project} ({self.workspace})", file=self.stream, flush=True)
+            print(f"\nEmiCoder | {self.provider} / {self.model} | {self.execution_mode}\nWorkspace: {project} ({self.workspace})", file=self.stream, flush=True)
 
     def _handle_status(self, raw):
         text = raw.strip()
@@ -432,7 +432,7 @@ class TerminalDashboard:
         header.add_row(
             Text("▣", style="bold bright_cyan"),
             Group(
-                Text("LOCAL CODEX", style="bold white"),
+                Text("EmiCoder", style="bold white"),
                 Text(f"{self.provider.title()} · {self.model} · {self.execution_mode.title()}", style="dim"),
             ),
             Text(self._build_badge(), style=f"bold {self._build_badge_style()}"),

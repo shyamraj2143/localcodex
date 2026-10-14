@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Local Codex execution trajectory",
+  "title": "EmiCoder execution trajectory",
   "type": "object",
   "required": ["schema_version", "task_id", "timestamp", "request", "category", "workspace_summary", "relevant_paths", "plan", "events", "changed_files", "tests", "verification", "final_status", "review_status"],
   "properties": {

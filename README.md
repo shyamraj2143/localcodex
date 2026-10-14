@@ -54,7 +54,7 @@ A terminal-based AI coding assistant that can inspect, create, edit, and debug f
    ollama pull qwen2.5-coder:3b
    ```
 
-   The checked-in config uses `execution_mode: "hybrid"` and displays exactly four coding-model choices at startup: (1) NVIDIA Qwen2.5-Coder 32B, (2) Groq Qwen3.8 27B, (3) local DeepSeek Coder 1.3B, and (4) local Qwen2.5-Coder 3B. Hosted choices require their respective API keys; local choices require the exact model tag to be installed. Selecting either local choice runs strictly local/offline: no Groq/NVIDIA architect request, no hosted coder escalation, and no API key is required. If you want hosted assistance, explicitly choose option 1 (NVIDIA) or 2 (Groq) at startup; those options require their own valid API keys. The Groq architect does not receive permission to run workspace tools. Because request understanding sends the user task and compact workspace context to Groq, use this mode only if you are comfortable sending that context to the hosted API. Start with the repository launcher (or the `codex` command setup below) from the folder you want the agent to modify. `.env` is loaded from the repository even when launched in another workspace, and the current directory remains the task workspace. Local models must be installed; before each task the CLI checks that the selected model is available. `offline` blocks hosted requests, `online` allows provider selection, and `hybrid` shows the four fixed model choices and enables local coding with optional hosted assistance.
+   The checked-in config uses `execution_mode: "hybrid"` and displays exactly four coding-model choices at startup: (1) NVIDIA Qwen2.5-Coder 32B, (2) Groq Qwen3.8 27B, (3) local DeepSeek Coder 1.3B, and (4) local Qwen2.5-Coder 3B. Hosted choices require their respective API keys; local choices require the exact model tag to be installed. Selecting either local choice runs strictly local/offline: no Groq/NVIDIA architect request, no hosted coder escalation, and no API key is required. If you want hosted assistance, explicitly choose option 1 (NVIDIA) or 2 (Groq) at startup; those options require their own valid API keys. The Groq architect does not receive permission to run workspace tools. Because request understanding sends the user task and compact workspace context to Groq, use this mode only if you are comfortable sending that context to the hosted API. Start with the repository launcher (or the `EmiCoder` command setup below) from the folder you want the agent to modify. `.env` is loaded from the repository even when launched in another workspace, and the current directory remains the task workspace. Local models must be installed; before each task the CLI checks that the selected model is available. `offline` blocks hosted requests, `online` allows provider selection, and `hybrid` shows the four fixed model choices and enables local coding with optional hosted assistance.
 
    Optional local overrides may be placed in the untracked `.env` file:
    `OLLAMA_HOST=http://localhost:11434` and
@@ -81,15 +81,15 @@ A terminal-based AI coding assistant that can inspect, create, edit, and debug f
 6. Start EmiCoder while keeping the current directory as the workspace:
 
    ```powershell
-   $codexRepo = (Resolve-Path "$env:USERPROFILE\src\localcodex").Path
-   python "$codexRepo\main.py"
+   $emiCoderRepo = (Resolve-Path "$env:USERPROFILE\src\localcodex").Path
+   & "$emiCoderRepo\EmiCoder.bat"
    ```
 
    Replace the example clone directory with your actual repository location. The portable launcher uses the repository's `.venv` Python directly when it exists; activation is not required.
 
 ### Open EmiCoder by typing `EmiCoder` in the terminal
 
-The repository includes `EmiCoder.bat`. To make the command available in any Command Prompt or PowerShell window, create a user-local shim:
+The repository includes `EmiCoder.bat` and the backwards-compatible `codex.bat`. To make `EmiCoder` available from any directory, create a user-local shim pointing to your clone. This script refuses to replace an existing shim:
 
 1. In PowerShell, set the actual directory where you cloned this repository:
 
@@ -97,22 +97,32 @@ The repository includes `EmiCoder.bat`. To make the command available in any Com
    $repo = (Resolve-Path "C:\path\to\your\localcodex").Path
    $bin = Join-Path $env:USERPROFILE "bin"
    New-Item -ItemType Directory -Force -Path $bin | Out-Null
-   "@echo off`r`ncall `"$repo\EmiCoder.bat`" %*`r`n" | Set-Content -Encoding ascii (Join-Path $bin "EmiCoder.cmd")
+   $shim = Join-Path $bin "EmiCoder.cmd"
+   if (Test-Path -LiteralPath $shim) { throw "Refusing to overwrite existing command: $shim" }
+   "@echo off`r`ncall `"$repo\EmiCoder.bat`" %*`r`nexit /b %errorlevel%`r`n" | Set-Content -Encoding ascii $shim
+   $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+   $alreadyInPath = $userPath -split ";" | Where-Object {
+       [string]::Equals($_.TrimEnd("\"), $bin.TrimEnd("\"), [StringComparison]::OrdinalIgnoreCase)
+   }
+   if (-not $alreadyInPath) {
+       $updatedPath = if ([string]::IsNullOrWhiteSpace($userPath)) { $bin } else { $userPath.TrimEnd(";") + ";" + $bin }
+       [Environment]::SetEnvironmentVariable("Path", $updatedPath, "User")
+   }
    ```
 
-2. Add `%USERPROFILE%\bin` to your **user Path** using Windows **Edit environment variables for your account** > **Path** > **New**. Keep existing entries unchanged.
-3. Close and reopen Command Prompt or PowerShell.
-4. Change to the project you want EmiCoder to work on, then run:
+2. Close and reopen Command Prompt or PowerShell so it reads the updated user Path.
+3. Change to the project you want EmiCoder to work on, then run:
 
    ```powershell
    cd C:\path\to\your\project
    EmiCoder
    ```
 
-The launcher uses the repository's `.venv` Python when available, otherwise tries the Windows `py -3` launcher or `python` on `PATH`. The current folder becomes the coding workspace. Ollama and the configured model must be installed for local mode. The old `codex.bat` launcher is retained for compatibility.
+The shim calls the clone's launcher. It resolves `main.py` relative to the launcher, uses the repository `.venv` Python when available, and otherwise tries the Windows `py -3` launcher or `python` on `PATH`. The current folder remains the coding workspace, even when the shim is launched elsewhere. To keep the old command working, run `codex` through the existing `codex.bat`. Optionally set `LOCAL_CODEX_WORKSPACE` to an explicit workspace directory before launching. Ollama and the configured model must be installed for the default offline mode.
+
 ## Usage
 
-Start from PowerShell with `python "<clone-directory>\main.py"` or type `codex` after installing the user-local shim above. Startup lists the four configured provider/model choices and lets you reuse the local default. NVIDIA/Groq require explicit confirmation before leaving offline mode. Example:
+Start from PowerShell with `& "<clone-directory>\EmiCoder.bat"` or type `EmiCoder` after installing the user-local shim above. Startup lists the four configured provider/model choices and lets you reuse the local default. NVIDIA/Groq require explicit confirmation before leaving offline mode. Example:
 
 ```text
 Create a Python calculator in calculator.py with addition, subtraction, multiplication, division, clear, and backspace.
@@ -254,17 +264,20 @@ run it (pytest is not installed in the checked-in virtual environment).
 
 ## Troubleshooting Windows and VS Code
 
-- If `codex` is not recognized, verify that the folder containing `EmiCoder.bat`
+- If `EmiCoder` is not recognized, verify that `%USERPROFILE%\bin` is in the user
+  PATH and contains `EmiCoder.cmd`, then open a new terminal. The legacy `codex`
+  command remains available through `codex.bat`.
+- If `codex` is not recognized, verify that the folder containing `codex.bat`
   is discoverable through the user PATH, then open a new terminal. The portable
   repository launcher itself uses paths relative to its own location; a
   machine-specific global `codex.cmd` shim belongs in the user's home folder,
   not in the repository.
 - If the installed Ollama model is reported missing, run `ollama list`, check
-  `OLLAMA_HOST` and `OLLAMA_MODEL` in the local `.env`, then restart Codex.
+  `OLLAMA_HOST` and `OLLAMA_MODEL` in the local `.env`, then restart EmiCoder.
   Never commit the real `.env` file.
 - If CMD displays an unexpected prompt such as `Enter char to delete up to:`,
   press Ctrl+C once to stop the current interactive command. Open a new CMD
-  window and check whether the prompt recurs before running Codex. Do not delete
+  window and check whether the prompt recurs before running EmiCoder. Do not delete
   registry entries or startup scripts without identifying the source.
 - If Ctrl+clicking files in VS Code opens a blank editor/window showing only the
   VS Code logo, this is usually a local VS Code/editor-state, extension, or

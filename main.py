@@ -44,7 +44,7 @@ class UI:
     @classmethod
     def header(cls, workspace, provider, model, tool_count, execution_mode="OFFLINE", worker_count=0):
         project = os.path.basename(os.path.normpath(workspace)) or workspace
-        print(cls.color("EMICODER", cls.BOLD + cls.CYAN)
+        print(cls.color("EmiCoder", cls.BOLD + cls.CYAN)
               + f"  {provider.upper()} / {model}  [{execution_mode.upper()}]")
         print(f"Workspace: {project} ({workspace})\n")
 

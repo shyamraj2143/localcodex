@@ -68,7 +68,7 @@ def test_rich_dashboard_starts_and_finishes_without_a_tty():
     dashboard.bus.emit("model.request", provider="mock", model="test")
     dashboard.bus.emit("model.response", duration=0.01, success=True)
     dashboard.bus.emit("task.finished", status="PASS")
-    assert "LOCAL CODEX" in output.getvalue()
+    assert "EmiCoder" in output.getvalue()
     assert "Completed and verified" in output.getvalue()
 
 

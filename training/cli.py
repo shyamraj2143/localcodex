@@ -31,7 +31,7 @@ def _report(path: str, records: list[dict]) -> tuple[list[dict], dict]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m training.cli", description="Offline-first Local Codex training data tools")
+    parser = argparse.ArgumentParser(prog="python -m training.cli", description="Offline-first EmiCoder training data tools")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor", help="Report hardware and Ollama training compatibility")
     datasets = sub.add_parser("datasets", help="Inspect and prepare local datasets")

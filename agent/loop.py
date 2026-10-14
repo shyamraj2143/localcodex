@@ -1787,7 +1787,7 @@ Workspace root is the current directory. Keep file operations inside it.
                     if spec_issues:
                         details.append("acceptance criteria failed: " + "; ".join(spec_issues))
                     final_text = (
-                        "Local Codex could not verify task completion because "
+                        "EmiCoder could not verify task completion because "
                         + "; ".join(details)
                         + ". The model may be too small for this task. "
                         "Try Groq or a stronger local coding model, then ask it to continue."
@@ -2023,7 +2023,7 @@ Workspace root is the current directory. Keep file operations inside it.
                         self.session_history = self.session_history[-(MAX_SESSION_TURNS * 2):]
                         return self._format_final_report(summary)
                     return self._format_final_report(
-                        "Local Codex detected a repeated tool-call loop and tried file-generation recovery, "
+                        "EmiCoder detected a repeated tool-call loop and tried file-generation recovery, "
                         "but it could not produce all requested files with a passing verification command. "
                         "The task is NOT marked successful; inspect the reported checks and try a stronger model."
                     )
