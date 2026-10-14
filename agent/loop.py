@@ -553,13 +553,9 @@ class MultiModelAgent:
         """Build and verify a narrowly supported Tkinter car game through real tools."""
         if not supports_car_game_recovery(task):
             return None
-        specified = {
-            os.path.basename(item.get("path", "")).lower()
-            for item in (specification or {}).get("expected_files", [])
-            if isinstance(item, dict)
-        }
-        if "main.py" not in specified:
-            return None
+        # A small-model specification may contain stale paths from the previous task
+        # (e.g. calculator/main.py). The user explicitly requested a game, so the
+        # deterministic recovery owns its known file layout instead of trusting those paths.
         if "write_file" not in self.tools or "run_command" not in self.tools:
             return None
 
