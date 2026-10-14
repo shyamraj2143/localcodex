@@ -7,8 +7,8 @@ import textwrap
 def supports_calculator_gui(task):
     text = str(task or "").casefold()
     arithmetic = re.search(
-        r"\b(add(?:ition)?|subtract(?:ion)?|minus|multiply|multiplication|"
-        r"multiplication|divide|division|calculator|arithmetic)\b", text
+        r"\b(add(?:ition)?|subtract(?:ion)?|minus|multiply|multipli(?:cation|cation)|"
+        r"multiplecation|divide|divis(?:ion|ition)|calculator|arithmetic)\b", text
     )
     language = re.search(r"\bpython\b", text)
     gui = re.search(r"\b(gui|graphical|window|tkinter|interface)\b", text)
