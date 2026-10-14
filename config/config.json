@@ -7,8 +7,8 @@
     "dashboard_show_technical": false,
     "local_model": "qwen2.5-coder:3b",
     "startup_local_model_options": [
-        "qwen2.5-coder:3b",
-        "deepseek-coder:1.3b"
+        "deepseek-coder:1.3b",
+        "qwen2.5-coder:3b"
     ],
     "ollama_base_url": "http://localhost:11434/v1",
     "models": {
@@ -21,13 +21,13 @@
     "max_parallel_tool_workers": 2,
     "max_concurrent_llm_requests": 1,
     "max_total_workers": 3,
-    "max_agent_steps": 32,
-    "task_deadline_seconds": 300,
+    "max_agent_steps": 20,
+    "task_deadline_seconds": 240,
     "workspace_context_chars": 6500,
     "temperature": 0.1,
     "max_tokens": 8192,
     "retry": {
-        "max_attempts": 2,
+        "max_attempts": 1,
         "base_delay": 1.5
     },
     "nvidia_model": "openai/gpt-oss-20b",
@@ -39,10 +39,10 @@
     "provider_fallback_enabled": false,
     "hosted_api_enabled": true,
     "local_only": false,
-    "hosted_coder_escalation": false,
+    "hosted_coder_escalation": true,
     "escalation_provider": "auto",
     "max_escalations": 1,
-    "request_timeout_seconds": 90,
+    "request_timeout_seconds": 45,
     "persistent_memory_enabled": true,
     "training_data_collection_enabled": true,
     "workspace_memory_dir": ".localcodex/memory",
