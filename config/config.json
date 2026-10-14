@@ -1,5 +1,5 @@
 {
-    "execution_mode": "auto",
+    "execution_mode": "hybrid",
     "provider": "ollama",
     "ui_mode": "auto",
     "dashboard_demo_mode": true,
