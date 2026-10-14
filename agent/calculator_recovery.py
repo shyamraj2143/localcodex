@@ -164,31 +164,29 @@ def calculator_project_files(folder="calculator"):
     if folder in {".", ".."} or any(part in {".", ".."} for part in folder.replace("\\", "/").split("/")):
         folder = "calculator"
     base = calculator_files()
-    package = folder.replace("/", ".").replace("\\", ".")
-    launcher = (
-        '"'"'"""Compatibility launcher for the calculator project."""
-from calculator.main import main
-
-if __name__ == "__main__":
-    main()
-'"'"'
-        if folder == "calculator" else
-        '"'"'"""Launch the calculator GUI from its project folder."""
-import runpy
-runpy.run_path('FOLDER/main.py', run_name="__main__")
-'"'"'.replace("FOLDER", folder)
-    )
+    if folder == "calculator":
+        launcher = (
+            '"""Compatibility launcher for the calculator project."""\\n'
+            'from calculator.main import main\\n\\n'
+            'if __name__ == "__main__":\\n'
+            '    main()\\n'
+        )
+    else:
+        launcher = (
+            '"""Launch the calculator GUI from its project folder."""\\n'
+            'import runpy\\n'
+            f"runpy.run_path({(folder + '/main.py')!r}, run_name='__main__')\\n"
+        )
     return {
-        f"{folder}/__init__.py": '"'"'"""Calculator application package."""
-'"'"',
+        f"{folder}/__init__.py": '"""Calculator application package."""\\n',
         f"{folder}/calculator.py": base["calculator.py"],
         f"{folder}/main.py": base["calculator_gui.py"],
         f"{folder}/test_calculator.py": base["test_calculator.py"],
         "main.py": launcher,
         f"{folder}/README.md": (
-            "# Python Calculator\n\nRun the GUI from the repository root with python main.py, "
-            f"or directly with python {folder}/main.py.\n\n"
-            f"Run tests with python -m unittest discover -s {folder} -p test_calculator.py -v.\n"
-            "Uses only Python standard library modules (Tkinter for GUI).\n"
+            "# Python Calculator\\n\\nRun the GUI from the repository root with python main.py, "
+            f"or directly with python {folder}/main.py.\\n\\n"
+            f"Run tests with python -m unittest discover -s {folder} -p test_calculator.py -v.\\n"
+            "Uses only Python standard library modules (Tkinter for GUI).\\n"
         ),
     }
