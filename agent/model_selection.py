@@ -132,10 +132,9 @@ def choose_provider(config, input_fn=input, output=print, models=None):
             config["task_architect_enabled"] = False
             config["hosted_coder_escalation"] = False
             config["provider_fallback_enabled"] = False
-        else:
+        elif selected_provider == "nvidia":
             config["local_only"] = False
             config["hosted_api_enabled"] = True
-        elif selected_provider == "nvidia":
             config["execution_mode"] = "online"
             config["nvidia_model"] = selected_model
             config["hosted_coder_escalation"] = False
