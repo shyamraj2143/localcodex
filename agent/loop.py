@@ -178,6 +178,10 @@ def _test_run_executed(record):
         return bool(re.search(r"\b[1-9]\d*\s+(?:passing|passed|tests? passed)\b", output))
     return False
 
+def _has_passing_behavioral_tests(commands):
+    """Only count a task as verified after a test runner actually ran tests successfully."""
+    return any(_test_run_executed(item) for item in commands if isinstance(item, dict))
+
 
 def _test_counts(command, stdout="", stderr=""):
     """Extract only counts actually printed by recognizable test runners."""
@@ -424,6 +428,8 @@ class MultiModelAgent:
             meaningful and meaningful[-1].get("success")
             and meaningful[-1].get("return_code") == 0
         )
+        behavioral_tests_pass = _has_passing_behavioral_tests(commands)
+        report["behavioral_tests_pass"] = behavioral_tests_pass
         static_pass = all(item.get("success") for item in latest_checks.values())
         missing_artifacts = self._missing_expected_artifacts(report.get("task", ""))
         report["missing_artifacts"] = missing_artifacts
@@ -431,14 +437,16 @@ class MultiModelAgent:
         report["completeness_issues"] = spec_issues
         if report.get("deadline_reached") and not changed:
             lines.append("Verification status: BLOCKED — the task deadline expired before files were changed.")
-        elif changed and latest_meaningful_pass and static_pass and not missing_artifacts and not spec_issues:
-            lines.append("Verification status: PASS — automatic file checks and the latest relevant test/check command passed.")
+        elif changed and latest_meaningful_pass and behavioral_tests_pass and static_pass and not missing_artifacts and not spec_issues:
+            lines.append("Verification status: PASS — static checks passed and a relevant test runner discovered and passed task-specific tests.")
         elif changed:
             reasons = []
             if not latest_meaningful_pass:
                 reasons.append("no successful relevant test/syntax/build command was recorded after the changes")
             if not static_pass:
                 reasons.append("one or more latest automatic file checks failed")
+            if not behavioral_tests_pass:
+                reasons.append("no successful task-specific behavioral test run with at least one discovered test was recorded")
             if missing_artifacts:
                 reasons.append("requested deliverables are still missing: " + ", ".join(missing_artifacts))
             lines.append("Verification status: PARTIAL — " + "; ".join(reasons) + ".")
@@ -449,7 +457,7 @@ class MultiModelAgent:
                 lines.append("Verification status: no file modifications were recorded; review the task summary above.")
         if report.get("deadline_reached") and not changed:
             report["verification_status"] = "BLOCKED"
-        elif changed and latest_meaningful_pass and static_pass and not missing_artifacts and not spec_issues:
+        elif changed and latest_meaningful_pass and behavioral_tests_pass and static_pass and not missing_artifacts and not spec_issues:
             report["verification_status"] = "PASS"
         elif changed:
             report["verification_status"] = "PARTIAL"
@@ -1490,9 +1498,10 @@ Understand the entire request in English, Hindi, or Hinglish. Finish the user's 
 For a coding/build request, create complete, useful, runnable implementation code, not empty files, placeholders, TODOs, or explanations.
 Inspect the existing project briefly, infer sensible defaults, and preserve its language/framework. For a simple new app with no stack, choose a practical default and implement it.
 IMPORTANT: write_file automatically creates parent folders. Prefer writing the actual source file directly; do NOT spend a step creating a folder when the file write can create it.
-Plan the minimum deliverables mentally, then write the code, add tests where practical, run the relevant test/build/program, fix failures, and rerun.
-Do not run old unrelated tests and call the new task complete. A command only verifies a task if it checks the current changed code.
-Avoid repeating actions and avoid spending steps on folder/list operations once enough context is known. Never claim success without tool evidence.
+Plan the minimum deliverables, then write complete code AND task-specific behavioral tests. Tests must exercise real behavior with representative inputs and edge cases (for a calculator, assert all four operations and division by zero; for a game, simulate player input, state updates, scoring/collisions and restart). Run the tests after implementation, inspect the actual output, fix every failure, and rerun.
+For GUI applications, test core logic headlessly where possible and perform a bounded launch/smoke check when the environment supports it. Do not claim you manually played a game or interacted with a GUI unless you actually did. If GUI interaction is unavailable, clearly report the headless tests and the unverified GUI portion.
+Do not run old unrelated tests and call the new task complete. Syntax checks/builds alone do NOT prove behavior. Never claim success without evidence from a test runner that discovered and passed at least one test for the current task.
+Avoid repeating actions and avoid spending steps on folder/list operations once enough context is known.
 Keep file operations inside the workspace. Ask only if an essential requirement cannot be inferred.
 """
         else:
@@ -1516,7 +1525,8 @@ MANDATORY WORKFLOW:
 10. Do not expose chain-of-thought. Give concise progress updates through tool use and a final summary.
 11. For ordinary underspecified coding requests (for example, "make this GUI better"), infer sensible defaults, inspect the project, and implement them instead of asking the user to restate an obvious goal.
 12. Treat the entire user message beginning with "Task:" as one complete task. Preserve all requirements, even if the prompt contains multiple paragraphs.
-13. Before finishing, verify requested files exist and run a syntax check or relevant tests when practical. If a check fails, fix it and rerun the check.
+13. Before finishing, verify requested files exist and run task-specific behavioral tests, not only syntax checks. Tests must use sample inputs and edge cases; game tests should simulate key/button input and gameplay state changes. For GUIs, test logic headlessly and run a bounded GUI launch smoke test if possible. Never claim manual GUI interaction unless it occurred.
+14. "Successfully done" is allowed only when the changed files pass static checks AND a relevant test runner demonstrably discovered and passed at least one test for this task. If that evidence is missing or any relevant test fails, report PARTIAL/FAILED with the exact blocker; do not present the task as successful.
 
 TOOL CALL FORMAT:
 - Prefer native function tool calls.
