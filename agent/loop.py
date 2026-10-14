@@ -2095,8 +2095,20 @@ Workspace root is the current directory. Keep file operations inside it.
                     item for item in completed_report.get("llm_requests", [])
                     if isinstance(item, dict) and item.get("success") is False
                 ]
-                if completed_report.get("verification_status") != "PASS" and failed_requests:
-                    failure = failed_requests[-1].get("error") or completed_report.get("initial_error") or "Selected provider failed before completing the task."
+                architect_status = str(completed_report.get("architect", {}).get("status", "")).upper()
+                coder_status = str(completed_report.get("coder", {}).get("status", "")).upper()
+                failure_evidence = bool(
+                    failed_requests
+                    or completed_report.get("initial_error")
+                    or architect_status in {"FAILED", "FAIL", "ERROR"}
+                    or coder_status in {"FAILED", "FAIL", "ERROR"}
+                )
+                if completed_report.get("verification_status") != "PASS" and failure_evidence:
+                    failure = (
+                        (failed_requests[-1].get("error") if failed_requests else None)
+                        or completed_report.get("initial_error")
+                        or f"Provider task failed (architect={architect_status or 'unknown'}, coder={coder_status or 'unknown'})."
+                    )
                     recovered_result = self._recover_car_game_after_provider_failure(
                         task, specification, failure
                     )
