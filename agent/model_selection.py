@@ -87,6 +87,58 @@ def choose_provider(config, input_fn=input, output=print, models=None):
     local = models if models is not None else discover_ollama_models(config.get("ollama_base_url", "http://localhost:11434/v1"))
     default_provider = str(config.get("provider", "ollama" if offline else "groq")).lower()
     if config.get("execution_mode") == "hybrid":
+        # Keep this startup menu intentionally fixed at exactly four choices.
+        # Hosted options remain visible when keys are missing, but cannot be selected
+        # until the corresponding key is configured.
+        choices = [
+            ("nvidia", "qwen/qwen2.5-coder-32b-instruct", "NVIDIA coding model", "NVIDIA_API_KEY"),
+            ("groq", "qwen/qwen3-32b", "Groq coding model", "GROQ_API_KEY"),
+            ("ollama", "deepseek-coder:1.3b", "DeepSeek local model", None),
+            ("ollama", "qwen2.5-coder:3b", "Qwen2.5-Coder 3B local model", None),
+        ]
+        output("Choose one of exactly four coding models:")
+        for index, (_provider, model_name, label, key_name) in enumerate(choices, 1):
+            suffix = ""
+            if key_name and not _has_credential(key_name):
+                suffix = f" · {key_name} missing"
+            if not key_name and model_name not in local:
+                suffix = " · not installed locally"
+            output(f"  [{index}] {label} — {model_name}{suffix}")
+        try:
+            raw_choice = input_fn("Coding model [4]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        choice_index = 4 if not raw_choice else int(raw_choice) if raw_choice.isdigit() else 0
+        if not 1 <= choice_index <= 4:
+            output("Invalid choice. Enter exactly 1, 2, 3, or 4.")
+            return None
+        selected_provider, selected_model, _label, key_name = choices[choice_index - 1]
+        if key_name and not _has_credential(key_name):
+            output(f"Cannot select this option: configure {key_name} in .env first.")
+            return None
+        if selected_provider == "ollama" and selected_model not in local:
+            output(f"Local model '{selected_model}' is not installed. Run: ollama pull {selected_model}")
+            return None
+        config["provider"] = selected_provider
+        config["selected_model"] = selected_model
+        config["local_only"] = selected_provider == "ollama" and not _has_credential("GROQ_API_KEY")
+        config["hosted_api_enabled"] = True
+        if selected_provider == "ollama":
+            config["execution_mode"] = "hybrid"
+            config["local_model"] = selected_model
+            config["hosted_provider_preference"] = "groq"
+            config["architect_provider"] = "groq"
+            config["hosted_coder_escalation"] = True
+        elif selected_provider == "nvidia":
+            config["execution_mode"] = "online"
+            config["nvidia_model"] = selected_model
+            config["hosted_coder_escalation"] = False
+        else:
+            config["execution_mode"] = "online"
+            config.setdefault("models", {})["coder"] = selected_model
+            config["hosted_coder_escalation"] = False
+        return selected_provider
+    if config.get("execution_mode") == "hybrid":
         if not local:
             output("HYBRID mode requires an installed local Ollama model. Start Ollama and install the configured model.")
             return None
