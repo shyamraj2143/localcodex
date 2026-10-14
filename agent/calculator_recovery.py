@@ -164,6 +164,10 @@ def calculator_project_files(folder="calculator"):
     if folder in {".", ".."} or any(part in {".", ".."} for part in folder.replace("\\", "/").split("/")):
         folder = "calculator"
     base = calculator_files()
+    gui = base["calculator_gui.py"].replace(
+        "from calculator import add, subtract, multiply, divide",
+        "try:\\n    from .calculator import add, subtract, multiply, divide\\nexcept ImportError:\\n    from calculator import add, subtract, multiply, divide",
+    )
     if folder == "calculator":
         launcher = (
             '"""Compatibility launcher for the calculator project."""\n'
@@ -180,7 +184,7 @@ def calculator_project_files(folder="calculator"):
     return {
         f"{folder}/__init__.py": '"""Calculator application package."""\n',
         f"{folder}/calculator.py": base["calculator.py"],
-        f"{folder}/main.py": base["calculator_gui.py"],
+        f"{folder}/main.py": gui,
         f"{folder}/test_calculator.py": base["test_calculator.py"],
         "main.py": launcher,
         f"{folder}/README.md": (
