@@ -168,3 +168,57 @@ def test_timeout_after_verified_file_changes_preserves_real_execution_evidence(t
     assert agent.last_task_report["commands"][0]["return_code"] == 0
     assert agent.last_task_report["verification_status"] == "PASS"
     assert "TimeoutError" in result
+
+
+
+def test_reported_provider_failure_triggers_recovery_without_raising(tmp_path, monkeypatch):
+    monkeypatch.setenv("NVIDIA_API_KEY", "test-nvidia-key")
+    config = {
+        "provider": "nvidia",
+        "execution_mode": "online",
+        "hosted_api_enabled": True,
+        "local_only": False,
+        "nvidia_model": "deepseek-ai/deepseek-v4.1-flash",
+        "architect_provider": "nvidia",
+        "task_architect_enabled": True,
+        "max_escalations": 0,
+        "persistent_memory_enabled": False,
+        "training_data_collection_enabled": False,
+    }
+    agent = MultiModelAgent(config, get_tools(), get_tool_schemas(), str(tmp_path))
+    specification = {
+        "expected_files": [{"path": "main.py", "responsibility": "Playable car game"}],
+        "test_commands": ["python -m unittest discover -s tests -v"],
+        "acceptance_criteria": ["Playable game with movement and collisions"],
+    }
+    agent._architect_task = lambda task, previous_report=None: (
+        specification, {"provider": "nvidia", "model": "deepseek-ai/deepseek-v4.1-flash", "status": "FAILED"}
+    )
+
+    def return_failed_report(task, orchestration, coder_provider=None):
+        agent.last_task_report = {
+            "task": task,
+            "specification": specification,
+            "llm_requests": [{
+                "provider": "nvidia",
+                "model": "deepseek-ai/deepseek-v4.1-flash",
+                "success": False,
+                "error": "Request timed out",
+            }],
+            "changed_files": [],
+            "commands": [],
+            "static_checks": [],
+            "tool_durations": [],
+            "verification_status": "FAIL",
+            "initial_error": "Request timed out",
+        }
+        return "Task finished: Not verified"
+
+    agent.integrate = return_failed_report
+    result = agent.run("Create a playable Python car racing game with GUI.")
+
+    expected = ["main.py", "game_logic.py", "README.md", "requirements.txt", "tests/test_game_logic.py"]
+    assert all((tmp_path / path).is_file() for path in expected)
+    assert agent.last_task_report["verification_status"] == "PASS"
+    assert agent.last_task_report["recovery_status"] == "PASS"
+    assert "Verification status: PASS" in result
