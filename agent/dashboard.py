@@ -202,7 +202,7 @@ class TerminalDashboard:
             # Use Rich's alternate screen so cursor redraws replace the dashboard
             # instead of flooding VS Code's scrollback with duplicate frames.
             self.live = Live(self._render(), console=Console(file=self.stream),
-                             refresh_per_second=4, screen=True, transient=False,
+                             refresh_per_second=4, screen=False, transient=False,
                              auto_refresh=True, redirect_stdout=False, redirect_stderr=False)
             self.live.start()
         elif not self.rich_enabled:
