@@ -166,7 +166,7 @@ def calculator_project_files(folder="calculator"):
     base = calculator_files()
     gui = base["calculator_gui.py"].replace(
         "from calculator import add, subtract, multiply, divide",
-        "try:\\n    from .calculator import add, subtract, multiply, divide\\nexcept ImportError:\\n    from calculator import add, subtract, multiply, divide",
+        "try:\n    from .calculator import add, subtract, multiply, divide\nexcept ImportError:\n    from calculator import add, subtract, multiply, divide",
     )
     if folder == "calculator":
         launcher = (
