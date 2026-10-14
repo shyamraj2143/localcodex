@@ -382,7 +382,7 @@ def main():
         quick_response = simple_reply(user_input)
         if quick_response is not None:
             print()
-            print(UI.color("  Codex", UI.BOLD + UI.GREEN))
+            print(UI.color("  EmiCoder", UI.BOLD + UI.GREEN))
             print("  " + quick_response.replace("\n", "\n  "))
             print()
             continue
@@ -403,7 +403,7 @@ def main():
                     )
                     print(
                         UI.color(
-                            "\n  Codex",
+                            "\n  EmiCoder",
                             UI.BOLD + UI.GREEN,
                         )
                     )
@@ -417,7 +417,7 @@ def main():
             if request_kind == "explanation":
                 try:
                     answer = agent.explain(user_input)
-                    print(UI.color("\n  Codex", UI.BOLD + UI.GREEN))
+                    print(UI.color("\n  EmiCoder", UI.BOLD + UI.GREEN))
                     print("\n" + answer)
                 except Exception as error:
                     UI.error(str(error))
@@ -434,7 +434,7 @@ def main():
             recovery_result = offer_provider_recovery(agent, config, user_input)
             if recovery_result is not None:
                 result = recovery_result
-            print(UI.color("\n  Codex", UI.BOLD + UI.GREEN))
+            print(UI.color("\n  EmiCoder", UI.BOLD + UI.GREEN))
             print()
             print(str(result).strip())
             report = agent.last_task_report or {}
