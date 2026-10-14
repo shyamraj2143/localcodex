@@ -74,3 +74,43 @@ def test_offline_to_hosted_requires_explicit_confirmation():
                                models=["qwen"]) is None
     assert config["execution_mode"] == "offline"
     assert config["provider"] == "ollama"
+
+
+
+def test_ollama_discovery_falls_back_to_cli_when_api_returns_empty_list():
+    class EmptyResponse:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self, limit): return b'{"models": []}'
+
+    class Completed:
+        returncode = 0
+        stdout = "NAME ID SIZE MODIFIED\nqwen2.5-coder:3b f72c60 1.9 GB 4 days ago\n"
+
+    with patch("urllib.request.urlopen", return_value=EmptyResponse()), \\
+         patch("subprocess.run", return_value=Completed()):
+        assert discover_ollama_models("http://localhost:11434/v1", timeout=0.1) == [
+            "qwen2.5-coder:3b"
+        ]
+
+
+def test_offline_default_uses_discovered_model_even_if_startup_options_are_stale():
+    config = {
+        "execution_mode": "offline",
+        "provider": "ollama",
+        "local_model": "qwen2.5-coder:3b",
+        "startup_local_model_options": ["deepseek-coder:1.3b"],
+        "nvidia_model": "nvidia-coder",
+        "models": {"coder": "groq-coder"},
+    }
+    output = []
+    with patch.dict("os.environ", {"NVIDIA_API_KEY": "", "GROQ_API_KEY": ""}):
+        provider = choose_provider(
+            config,
+            input_fn=lambda prompt: "0",
+            output=output.append,
+            models=["qwen2.5-coder:3b"],
+        )
+    assert provider == "ollama"
+    assert config["selected_model"] == "qwen2.5-coder:3b"
+    assert any("qwen2.5-coder:3b" in line for line in output)
