@@ -52,7 +52,7 @@ class ChangedFileVerificationTests(unittest.TestCase):
             "stderr": "",
         }
         self.assertFalse(_test_run_executed(record))
-        self.assertFalse(_has_passing_behavioral_tests([record]))
+        self.assertFalse(_has_passing_behavioral_tests([record], ["tests/test_verification.py"]))
 
     def test_zero_discovered_tests_is_not_success(self):
         record = {
@@ -81,9 +81,9 @@ class ChangedFileVerificationTests(unittest.TestCase):
             "stderr": "FAILED (failures=1)",
         }
         self.assertTrue(_test_run_executed(passing))
-        self.assertTrue(_has_passing_behavioral_tests([passing]))
+        self.assertTrue(_has_passing_behavioral_tests([passing], ["tests/test_calculator.py"]))
         self.assertFalse(_test_run_executed(failing))
-        self.assertFalse(_has_passing_behavioral_tests([failing]))
+        self.assertFalse(_has_passing_behavioral_tests([failing], ["tests/test_calculator.py"]))
 
 
 if __name__ == "__main__":
