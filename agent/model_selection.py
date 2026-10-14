@@ -10,28 +10,45 @@ import urllib.request
 from agent.provider_support import credential_present
 
 
-def discover_ollama_models(base_url="http://localhost:11434/v1", timeout=1.5):
-    """Return locally installed Ollama model tags; report unavailable as an empty list."""
-    root = str(base_url).rstrip("/")
+def discover_ollama_models(base_url=None, timeout=1.5):
+    """Return installed Ollama model tags, trying the HTTP API and CLI.
+
+    A successful but empty API response is not treated as authoritative: the
+    CLI is also checked because some proxy/compatibility endpoints return an
+    empty payload even while the local Ollama CLI has models installed.
+    """
+    base_url = base_url or os.getenv("OLLAMA_HOST") or "http://localhost:11434/v1"
+    root = str(base_url).strip().rstrip("/")
     if root.endswith("/v1"):
-        root = root[:-3]
+        root = root[:-3].rstrip("/")
+    discovered = set()
     try:
         request = urllib.request.Request(root + "/api/tags", headers={"Accept": "application/json"})
         with urllib.request.urlopen(request, timeout=max(0.1, float(timeout))) as response:
             payload = json.loads(response.read(1_000_000).decode("utf-8"))
         models = payload.get("models", []) if isinstance(payload, dict) else []
-        return sorted({item["name"] for item in models if isinstance(item, dict) and isinstance(item.get("name"), str) and item["name"]})
+        for item in models:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name") or item.get("model")
+            if isinstance(name, str) and name.strip():
+                discovered.add(name.strip())
     except (OSError, ValueError, KeyError, TypeError, urllib.error.URLError):
         pass
-    try:
-        completed = subprocess.run(["ollama", "list"], capture_output=True, text=True,
-                                   timeout=max(0.1, float(timeout)), check=False)
-        if completed.returncode:
-            return []
-        rows = completed.stdout.splitlines()[1:]
-        return sorted({line.split()[0] for line in rows if line.split()})
-    except (OSError, subprocess.SubprocessError):
-        return []
+
+    if not discovered:
+        try:
+            completed = subprocess.run(["ollama", "list"], capture_output=True, text=True,
+                                       timeout=max(0.1, float(timeout)), check=False)
+            if completed.returncode == 0:
+                rows = completed.stdout.splitlines()[1:]
+                for line in rows:
+                    columns = line.split()
+                    if columns and columns[0].lower() not in {"name", "model"}:
+                        discovered.add(columns[0].strip())
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return sorted(discovered)
 
 
 def configured_models(config, provider):
@@ -71,9 +88,15 @@ def choose_provider(config, input_fn=input, output=print, models=None):
     default_provider = str(config.get("provider", "ollama" if offline else "groq")).lower()
     if offline:
         output("Execution mode OFFLINE. NVIDIA/Groq selections require an explicit switch to ONLINE.")
-        configured_local = config.get("startup_local_model_options") or [
-            config.get("local_model"), config.get("secondary_local_model")]
-        local_options = [name for name in configured_local if name in local][:2]
+        configured_local = config.get("startup_local_model_options") or []
+        # Always offer the configured default when it is installed, then any
+        # configured alternatives, then other discovered local models. This
+        # avoids a broken [0] default when startup options are stale/incomplete.
+        default_local = str(config.get("local_model") or "").strip()
+        ordered_local = ([default_local] if default_local in local else [])
+        ordered_local.extend(name for name in configured_local if name in local and name not in ordered_local)
+        ordered_local.extend(name for name in local if name not in ordered_local)
+        local_options = ordered_local[:4]
         choices = [("ollama", name) for name in local_options]
         if configured_models(config, "nvidia"):
             choices.append(("nvidia", configured_models(config, "nvidia")[0]))
