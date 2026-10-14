@@ -199,8 +199,11 @@ class TerminalDashboard:
         self.verification_status = "Not verified"
         self._set_activity("Understanding your request", reason="The agent begins by identifying the requested outcome.")
         if self.rich_enabled and self.live is None:
+            # Use Rich's alternate screen so cursor redraws replace the dashboard
+            # instead of flooding VS Code's scrollback with duplicate frames.
             self.live = Live(self._render(), console=Console(file=self.stream),
-                             refresh_per_second=4, screen=False, transient=False, auto_refresh=True)
+                             refresh_per_second=4, screen=True, transient=False,
+                             auto_refresh=True, redirect_stdout=False, redirect_stderr=False)
             self.live.start()
         elif not self.rich_enabled:
             project = os.path.basename(os.path.normpath(self.workspace)) or self.workspace
@@ -435,7 +438,7 @@ class TerminalDashboard:
             Text(self._build_badge(), style=f"bold {self._build_badge_style()}"),
         )
 
-        title = Text(self._say("What's happening?", "अभी क्या हो रहा है?"), style="bright_cyan")
+        title = Text("What's happening?", style="bright_cyan")
         task = Text(self._task_headline(), style="bold white")
         rows = Table.grid(expand=True, padding=(0, 1))
         rows.add_column(width=3)
@@ -504,10 +507,10 @@ class TerminalDashboard:
         python_state = "done" if changed_python else "active" if writing and self.current_file.lower().endswith((".py", ".pyw")) else "pending"
         code_state = "done" if changed_python and self.verification_status == "Verified" else "failed" if self.workflow.get("implementing") == "failed" else "active" if writing or changed_python else "pending"
         return [
-            (self._say("Project folder banao", "Project folder banaya"), folder_state),
-            (self._say("Python files banao", "Python files banाईं"), python_state),
-            (self._say("Code likh raha hoon", "Code likh raha hoon"), code_state),
-            (self._say("Application test kar raha hoon", "Application test kar raha hoon"), test_state),
+            ("Create project folder", folder_state),
+            ("Create Python files", python_state),
+            ("Write code", code_state),
+            ("Test application", test_state),
         ]
 
     def _checklist(self):
@@ -546,7 +549,8 @@ class TerminalDashboard:
         return "\n".join(lines)
 
     def _say(self, english, hinglish):
-        return hinglish if self.demo_mode and self.language == "hinglish" else english
+        # Keep all user-facing dashboard copy in English.
+        return english
 
     def _tool_description(self, tool, arguments, old_label):
         path = str(arguments.get("path", "")) if isinstance(arguments, dict) else ""
@@ -554,7 +558,7 @@ class TerminalDashboard:
             self.current_file = path.replace("\\\\", "/")
         query = str(arguments.get("query", "")) if isinstance(arguments, dict) else ""
         command = str(arguments.get("command", "")) if isinstance(arguments, dict) else ""
-        hinglish = self.demo_mode and self.language == "hinglish"
+        hinglish = False
         descriptions = {
             "list_files": ("Project ki files inspect kar raha hai." if hinglish else "Looking through the project files.", "This helps the agent understand the existing project."),
             "read_file": (f"Project file padh raha hai: {path}." if hinglish else f"Reading project file: {path}.", "The agent needs the existing code before deciding what to change."),
