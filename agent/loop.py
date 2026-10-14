@@ -2085,6 +2085,23 @@ Workspace root is the current directory. Keep file operations inside it.
             try:
                 self.show_status("Implementing task")
                 result = self.integrate(task, orchestration)
+
+                # Some provider clients convert timeouts into a normal failed
+                # task report instead of raising. Recover supported car-game
+                # requests on that path too; previously the recovery ran only
+                # when integrate() raised, leaving the task unimplemented.
+                completed_report = self.last_task_report if isinstance(self.last_task_report, dict) else {}
+                failed_requests = [
+                    item for item in completed_report.get("llm_requests", [])
+                    if isinstance(item, dict) and item.get("success") is False
+                ]
+                if completed_report.get("verification_status") != "PASS" and failed_requests:
+                    failure = failed_requests[-1].get("error") or completed_report.get("initial_error") or "Selected provider failed before completing the task."
+                    recovered_result = self._recover_car_game_after_provider_failure(
+                        task, specification, failure
+                    )
+                    if recovered_result is not None:
+                        result = recovered_result
             except Exception as error:
                 previous_execution = self.last_task_report if isinstance(self.last_task_report, dict) else {}
                 self.last_task_report = {
