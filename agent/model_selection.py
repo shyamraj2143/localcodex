@@ -86,6 +86,22 @@ def choose_provider(config, input_fn=input, output=print, models=None):
     offline = config.get("execution_mode") == "offline"
     local = models if models is not None else discover_ollama_models(config.get("ollama_base_url", "http://localhost:11434/v1"))
     default_provider = str(config.get("provider", "ollama" if offline else "groq")).lower()
+    if config.get("execution_mode") == "hybrid":
+        if not local:
+            output("HYBRID mode requires an installed local Ollama model. Start Ollama and install the configured model.")
+            return None
+        configured_default = str(config.get("local_model") or "").strip()
+        selected_model = configured_default if configured_default in local else local[0]
+        config["provider"] = "ollama"
+        config["local_model"] = selected_model
+        config["selected_model"] = selected_model
+        config["local_only"] = False
+        config["hosted_api_enabled"] = True
+        output("Execution mode HYBRID: Ollama will write and run code; Groq may help interpret complex requests.")
+        output(f"Local coding model: {selected_model}")
+        if not _has_credential("GROQ_API_KEY"):
+            output("GROQ_API_KEY is not configured; request understanding will use the local-only fallback.")
+        return "ollama"
     if offline:
         output("Execution mode OFFLINE. NVIDIA/Groq selections require an explicit switch to ONLINE.")
         configured_local = config.get("startup_local_model_options") or []
