@@ -65,6 +65,14 @@ def test_car_game_recovery_is_not_used_for_unrelated_tasks():
     assert not supports_car_game_recovery("create a Python calculator GUI")
 
 
+def test_generic_python_gui_game_request_uses_playable_game_recovery():
+    from agent.game_recovery import supports_car_game_recovery
+
+    assert supports_car_game_recovery("create a new folder and then create a game in python with gui")
+    assert supports_car_game_recovery("build a new Python GUI game")
+    assert not supports_car_game_recovery("create a Python calculator GUI")
+
+
 def test_failed_provider_without_safe_recovery_is_reported_blocked_not_success(tmp_path, monkeypatch):
     monkeypatch.setenv("NVIDIA_API_KEY", "test-nvidia-key")
     config = {
