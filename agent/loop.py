@@ -181,11 +181,12 @@ def _test_run_executed(record):
 def _has_passing_behavioral_tests(commands, changed_files=None):
     """Require passing tests plus a test file created/updated as part of this task."""
     changed_files = changed_files or []
+    normalized = [str(path).replace(chr(92), "/").lower() for path in changed_files]
     changed_test_file = any(
-        re.search(r"(?:^|/|\\\\)(?:tests?/.*|test_[^/\\\\]+|[^/\\\\]+_test)\\.(?:py|js|jsx|ts|tsx|mjs|cjs)$",
-                  str(path).replace("\\\\", "/").lower())
-        or re.search(r"(?:^|/)tests?/", str(path).replace("\\\\", "/").lower())
-        for path in changed_files
+        "/tests/" in f"/{path}" or "/test/" in f"/{path}"
+        or re.search(r"(?:^|/)test_[^/]+\\.(?:py|js|jsx|ts|tsx|mjs|cjs)$", path)
+        or re.search(r"(?:^|/)[^/]+_test\\.(?:py|js|jsx|ts|tsx|mjs|cjs)$", path)
+        for path in normalized
     )
     if not changed_test_file:
         return False
