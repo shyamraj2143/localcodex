@@ -426,7 +426,10 @@ class TerminalDashboard:
         for label, state in self._checklist():
             mark = "✓" if state == "done" else "!" if state == "failed" else "·" if state == "active" else "○"
             rows.add_row(mark, label)
-        body = Group(Text(self.activity, style="bold white"), Text(f"Phase: {self.phase}", style="dim"), rows,
+        # Keep the main screen student-friendly: one live action, a short
+        # build checklist, and the truthful final result. Detailed phases and
+        # event traces remain available only in the optional debug log.
+        body = Group(Text(self.activity, style="bold white"), rows,
                      Text(f"Result: {self._result_label()}", style="bold"))
         if self.last_error:
             body = Group(body, Text(f"Issue / recovery: {self.last_error[:180]}", style="yellow"))
