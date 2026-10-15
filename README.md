@@ -286,3 +286,16 @@ run it (pytest is not installed in the checked-in virtual environment).
   `Developer: Reload Window` from the Command Palette. If it persists, test
   with extensions disabled using `code --disable-extensions`. Repository
   changes cannot repair a local VS Code profile or a global extension setting.
+
+## Fast exhibition demo prompts
+
+The coding loop includes deterministic, standard-library GUI templates for these short demo requests. They are routed before LLM planning to reduce latency and avoid incomplete placeholder apps from small local models:
+
+- `Create a calculator with a GUI.`
+- `Create a number guessing game with a GUI.`
+- `Create a to-do list app with a GUI.`
+- `Create an expense tracker with a GUI.`
+
+The calculator uses the existing calculator recovery. The other three apps are generated into their own folders (`number_guessing_game/`, `todo_list_app/`, and `expense_tracker/`) with a root `main.py` launcher, testable `app_logic.py`, and unit tests. The to-do list and expense tracker persist their records in local JSON files. Each fast route runs Python compilation and its behavioral unit tests; a GUI window is not automatically clicked through, so manual GUI smoke testing is still recommended on the target machine.
+
+These deterministic routes are intentionally limited to the four demo types. Other prompts continue through the normal coding-agent workflow.
