@@ -1,5 +1,7 @@
-"""Deterministic, dependency-free recovery for basic Python GUI calculator requests."""
+"""Deterministic, dependency-free recovery for Python GUI calculator requests."""
 
+import ast
+import operator
 import re
 import textwrap
 
@@ -11,137 +13,226 @@ def supports_calculator_gui(task):
         r"multiplecation|divide|divis(?:ion|ition)|calculator|arithmetic)\b", text
     )
     language = re.search(r"\bpython\b", text)
-    gui = re.search(r"\b(gui|graphical|window|tkinter|interface)\b", text)
+    gui = re.search(r"\b(gui|graphical|window|tkinter|interface|keypad)\b", text)
     return bool(arithmetic and language and gui)
 
 
 def calculator_files():
     return {
-        "calculator.py": textwrap.dedent('''\
-            """Pure arithmetic functions for the GUI calculator; standard library only."""
+        "calculator.py": textwrap.dedent('''\\
+            """Safe arithmetic expression evaluator; no third-party dependencies."""
+            import ast
+            import operator
 
-            def add(a, b):
-                return a + b
+            _BINARY = {
+                ast.Add: operator.add, ast.Sub: operator.sub,
+                ast.Mult: operator.mul, ast.Div: operator.truediv,
+                ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod,
+                ast.Pow: operator.pow,
+            }
+            _UNARY = {ast.UAdd: operator.pos, ast.USub: operator.neg}
 
+            def evaluate(expression):
+                """Evaluate numeric arithmetic only; never use eval()."""
+                try:
+                    tree = ast.parse(str(expression), mode="eval")
+                except (SyntaxError, ValueError) as exc:
+                    raise ValueError("Enter a valid arithmetic expression.") from exc
 
-            def subtract(a, b):
-                return a - b
+                def visit(node):
+                    if isinstance(node, ast.Expression):
+                        return visit(node.body)
+                    if isinstance(node, ast.Constant) and type(node.value) in (int, float):
+                        return node.value
+                    if isinstance(node, ast.BinOp) and type(node.op) in _BINARY:
+                        left, right = visit(node.left), visit(node.right)
+                        if isinstance(node.op, ast.Pow) and abs(right) > 100:
+                            raise ValueError("Exponent is too large.")
+                        return _BINARY[type(node.op)](left, right)
+                    if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY:
+                        return _UNARY[type(node.op)](visit(node.operand))
+                    raise ValueError("Only numeric arithmetic is allowed.")
 
-
-            def multiply(a, b):
-                return a * b
-
-
-            def divide(a, b):
-                if b == 0:
-                    raise ZeroDivisionError("Cannot divide by zero.")
-                return a / b
+                try:
+                    result = visit(tree)
+                except ZeroDivisionError:
+                    raise
+                except OverflowError as exc:
+                    raise ValueError("Result is too large.") from exc
+                if isinstance(result, complex) or not isinstance(result, (int, float)):
+                    raise ValueError("Result must be a real number.")
+                if isinstance(result, float) and not __import__("math").isfinite(result):
+                    raise ValueError("Result is not finite.")
+                return result
         '''),
-        "calculator_gui.py": textwrap.dedent('''\
-            """Simple Tkinter calculator. Run with: python calculator_gui.py."""
-
+        "calculator_gui.py": textwrap.dedent('''\\
+            """Modern keypad-style Tkinter calculator. Run: python calculator_gui.py"""
             import tkinter as tk
             from tkinter import messagebox
+            from calculator import evaluate
 
-            from calculator import add, subtract, multiply, divide
-
+            BG = "#101827"
+            PANEL = "#182338"
+            DISPLAY = "#0b1220"
+            TEXT = "#f3f6fc"
+            MUTED = "#9aa8bf"
+            ACCENT = "#5b8cff"
+            OPERATOR = "#263b5d"
+            DANGER = "#7f3345"
 
             class CalculatorApp:
                 def __init__(self, root):
                     self.root = root
+                    self.expression = ""
+                    self.just_evaluated = False
                     root.title("Python Calculator")
-                    root.geometry("360x300")
-                    root.resizable(False, False)
+                    root.geometry("350x500")
+                    root.minsize(320, 460)
+                    root.configure(bg=BG)
 
-                    tk.Label(root, text="Python Calculator", font=("Segoe UI", 16, "bold")).pack(pady=(14, 8))
-                    form = tk.Frame(root)
-                    form.pack(fill="x", padx=24)
+                    tk.Label(root, text="PYTHON CALCULATOR", bg=BG, fg=MUTED,
+                             font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=18, pady=(17, 8))
+                    display = tk.Frame(root, bg=DISPLAY, highlightthickness=1, highlightbackground="#2a3850")
+                    display.pack(fill="x", padx=14, pady=(0, 14))
+                    self.preview = tk.StringVar(value="")
+                    tk.Label(display, textvariable=self.preview, bg=DISPLAY, fg=MUTED,
+                             anchor="e", font=("Segoe UI", 11)).pack(fill="x", padx=12, pady=(10, 0))
+                    self.screen = tk.StringVar(value="0")
+                    tk.Label(display, textvariable=self.screen, bg=DISPLAY, fg=TEXT,
+                             anchor="e", font=("Segoe UI", 28, "bold")).pack(fill="x", padx=12, pady=(0, 10))
 
-                    tk.Label(form, text="First number").grid(row=0, column=0, sticky="w", pady=5)
-                    self.first = tk.Entry(form, width=22)
-                    self.first.grid(row=0, column=1, pady=5)
-                    tk.Label(form, text="Second number").grid(row=1, column=0, sticky="w", pady=5)
-                    self.second = tk.Entry(form, width=22)
-                    self.second.grid(row=1, column=1, pady=5)
-
-                    buttons = tk.Frame(root)
-                    buttons.pack(pady=12)
-                    operations = [
-                        ("Addition  +", add), ("Subtraction  −", subtract),
-                        ("Multiplication  ×", multiply), ("Division  ÷", divide),
+                    grid = tk.Frame(root, bg=BG)
+                    grid.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+                    for col in range(4):
+                        grid.columnconfigure(col, weight=1, uniform="col")
+                    for row in range(5):
+                        grid.rowconfigure(row, weight=1, uniform="row")
+                    keys = [
+                        [("AC", "clear", DANGER), ("⌫", "backspace", OPERATOR), ("%", "percent", OPERATOR), ("÷", "/", OPERATOR)],
+                        [("7", "7", PANEL), ("8", "8", PANEL), ("9", "9", PANEL), ("×", "*", OPERATOR)],
+                        [("4", "4", PANEL), ("5", "5", PANEL), ("6", "6", PANEL), ("−", "-", OPERATOR)],
+                        [("1", "1", PANEL), ("2", "2", PANEL), ("3", "3", PANEL), ("+", "+", OPERATOR)],
+                        [("+/−", "sign", PANEL), ("0", "0", PANEL), (".", ".", PANEL), ("=", "equals", ACCENT)],
                     ]
-                    for index, (label, operation) in enumerate(operations):
-                        tk.Button(
-                            buttons, text=label, width=15,
-                            command=lambda op=operation: self.calculate(op)
-                        ).grid(row=index // 2, column=index % 2, padx=4, pady=4)
+                    for r, row in enumerate(keys):
+                        for c, (label, action, color) in enumerate(row):
+                            btn = tk.Button(
+                                grid, text=label, command=lambda a=action: self.press(a),
+                                bg=color, fg=TEXT, activebackground=ACCENT, activeforeground=TEXT,
+                                relief="flat", bd=0, cursor="hand2",
+                                font=("Segoe UI", 14, "bold" if label in {"=", "AC"} else "normal"),
+                                highlightthickness=0
+                            )
+                            btn.grid(row=r, column=c, sticky="nsew", padx=4, pady=4, ipadx=2, ipady=4)
+                    root.bind("<Key>", self.on_key)
+                    root.bind("<Return>", lambda _e: self.press("equals"))
+                    root.bind("<KP_Enter>", lambda _e: self.press("equals"))
+                    root.bind("<Escape>", lambda _e: self.press("clear"))
+                    root.bind("<BackSpace>", lambda _e: self.press("backspace"))
 
-                    self.result = tk.StringVar(value="Result: —")
-                    tk.Label(root, textvariable=self.result, font=("Segoe UI", 12, "bold"),
-                             fg="#176b3a").pack(pady=(2, 8))
-                    tk.Button(root, text="Clear", command=self.clear).pack()
+                def refresh(self):
+                    self.screen.set(self.expression or "0")
 
-                    self.first.focus_set()
-                    root.bind("<Return>", lambda _event: self.calculate(add))
+                def press(self, action):
+                    if action == "clear":
+                        self.expression = ""
+                        self.preview.set("")
+                        self.just_evaluated = False
+                    elif action == "backspace":
+                        if self.just_evaluated:
+                            self.expression = ""
+                            self.just_evaluated = False
+                        else:
+                            self.expression = self.expression[:-1]
+                    elif action == "equals":
+                        self.calculate()
+                        return
+                    elif action == "percent":
+                        self.expression += "/100"
+                        self.just_evaluated = False
+                    elif action == "sign":
+                        if self.expression.startswith("-"):
+                            self.expression = self.expression[1:]
+                        elif self.expression:
+                            self.expression = "-" + self.expression
+                        self.just_evaluated = False
+                    else:
+                        if self.just_evaluated and (action.isdigit() or action == "."):
+                            self.expression = ""
+                        self.just_evaluated = False
+                        self.expression += "*" if action == "×" else action
+                    self.refresh()
 
-                def calculate(self, operation):
+                def calculate(self):
+                    if not self.expression:
+                        return
+                    shown = self.expression.replace("*", "×").replace("/", "÷").replace("-", "−")
                     try:
-                        a = float(self.first.get().strip())
-                        b = float(self.second.get().strip())
-                        value = operation(a, b)
-                        if isinstance(value, float) and value.is_integer():
-                            value = int(value)
-                        self.result.set(f"Result: {value}")
-                    except ValueError:
-                        messagebox.showerror("Invalid input", "Please enter valid numbers in both fields.")
-                    except ZeroDivisionError as error:
-                        messagebox.showerror("Math error", str(error))
+                        result = evaluate(self.expression)
+                        if isinstance(result, float) and result.is_integer():
+                            result = int(result)
+                        self.preview.set(shown + " =")
+                        self.expression = str(result)
+                        self.screen.set(str(result))
+                        self.just_evaluated = True
+                    except (ValueError, ZeroDivisionError) as exc:
+                        messagebox.showerror("Calculation error", str(exc))
+                    except Exception:
+                        messagebox.showerror("Calculation error", "This expression could not be calculated.")
 
-                def clear(self):
-                    self.first.delete(0, tk.END)
-                    self.second.delete(0, tk.END)
-                    self.result.set("Result: —")
-                    self.first.focus_set()
-
+                def on_key(self, event):
+                    if event.char in "0123456789.+-*/%":
+                        self.press(event.char)
+                    elif event.keysym in ("Return", "KP_Enter"):
+                        self.press("equals")
+                    elif event.keysym == "BackSpace":
+                        self.press("backspace")
+                    elif event.keysym == "Escape":
+                        self.press("clear")
 
             def main():
                 root = tk.Tk()
                 CalculatorApp(root)
                 root.mainloop()
 
-
             if __name__ == "__main__":
                 main()
         '''),
-        "test_calculator.py": textwrap.dedent('''\
+        "test_calculator.py": textwrap.dedent('''\\
             import unittest
-
-            from calculator import add, subtract, multiply, divide
-
+            from calculator import evaluate
 
             class CalculatorTests(unittest.TestCase):
-                def test_addition(self):
-                    self.assertEqual(add(12, 3), 15)
+                def test_basic_operations_and_precedence(self):
+                    self.assertEqual(evaluate("2+3*4"), 14)
+                    self.assertEqual(evaluate("(2+3)*4"), 20)
+                    self.assertEqual(evaluate("9-4"), 5)
+                    self.assertEqual(evaluate("8/2"), 4)
 
-                def test_subtraction(self):
-                    self.assertEqual(subtract(12, 3), 9)
-
-                def test_multiplication(self):
-                    self.assertEqual(multiply(12, 3), 36)
-
-                def test_division(self):
-                    self.assertEqual(divide(12, 3), 4)
+                def test_decimal_unary_modulo_and_power(self):
+                    self.assertEqual(evaluate("1.5+2.25"), 3.75)
+                    self.assertEqual(evaluate("-5+2"), -3)
+                    self.assertEqual(evaluate("10%3"), 1)
+                    self.assertEqual(evaluate("2**3"), 8)
 
                 def test_division_by_zero(self):
                     with self.assertRaises(ZeroDivisionError):
-                        divide(5, 0)
+                        evaluate("5/0")
 
+                def test_rejects_non_arithmetic_code(self):
+                    for expression in ("__import__('os')", "2+open('x')", "x+1"):
+                        with self.subTest(expression=expression):
+                            with self.assertRaises(ValueError):
+                                evaluate(expression)
+
+                def test_rejects_oversized_exponent(self):
+                    with self.assertRaises(ValueError):
+                        evaluate("2**101")
 
             if __name__ == "__main__":
                 unittest.main()
         '''),
     }
-
 
 
 def supports_calculator_project(task):
@@ -165,8 +256,8 @@ def calculator_project_files(folder="calculator"):
         folder = "calculator"
     base = calculator_files()
     gui = base["calculator_gui.py"].replace(
-        "from calculator import add, subtract, multiply, divide",
-        "try:\n    from .calculator import add, subtract, multiply, divide\nexcept ImportError:\n    from calculator import add, subtract, multiply, divide",
+        "from calculator import evaluate",
+        "try:\n    from .calculator import evaluate\nexcept ImportError:\n    from calculator import evaluate",
     )
     if folder == "calculator":
         launcher = (
@@ -182,7 +273,7 @@ def calculator_project_files(folder="calculator"):
             f"runpy.run_path({(folder + '/main.py')!r}, run_name='__main__')\n"
         )
     return {
-        f"{folder}/__init__.py": '"""Calculator application package."""\nfrom .calculator import add, subtract, multiply, divide\n',
+        f"{folder}/__init__.py": '"""Calculator application package."""\nfrom .calculator import evaluate\n',
         f"{folder}/calculator.py": base["calculator.py"],
         f"{folder}/main.py": gui,
         f"{folder}/test_calculator.py": base["test_calculator.py"],
