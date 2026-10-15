@@ -19,7 +19,7 @@ def supports_calculator_gui(task):
 
 def calculator_files():
     return {
-        "calculator.py": textwrap.dedent('''\\
+        "calculator.py": textwrap.dedent('''\
             """Safe arithmetic expression evaluator; no third-party dependencies."""
             import ast
             import operator
@@ -65,7 +65,7 @@ def calculator_files():
                     raise ValueError("Result is not finite.")
                 return result
         '''),
-        "calculator_gui.py": textwrap.dedent('''\\
+        "calculator_gui.py": textwrap.dedent('''\
             """Modern keypad-style Tkinter calculator. Run: python calculator_gui.py"""
             import tkinter as tk
             from tkinter import messagebox
@@ -198,7 +198,7 @@ def calculator_files():
             if __name__ == "__main__":
                 main()
         '''),
-        "test_calculator.py": textwrap.dedent('''\\
+        "test_calculator.py": textwrap.dedent('''\
             import unittest
             from calculator import evaluate
 
