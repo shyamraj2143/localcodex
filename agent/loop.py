@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from agent.groq import GroqClient
 from agent.context import WorkspaceContextManager
 from agent.game_recovery import car_game_files, supports_car_game_recovery
+from agent.quick_apps import detect_quick_app, quick_app_files
 from agent.calculator_recovery import calculator_files, calculator_project_files, supports_calculator_gui, supports_calculator_project
 from agent.nvidia import NvidiaClient
 from agent.ollama import OllamaClient
@@ -699,6 +700,69 @@ class MultiModelAgent:
         if not command_pass or not test_recorded:
             report["initial_error"] = "Calculator files were generated, but compile/test verification failed or discovered no tests. Review command output below."
         summary = (f"Created the calculator project in {folder}/ with a root main.py launcher, GUI arithmetic operations, input validation, clear button, and unit tests." if report["verification_status"] == "PASS" else "Created calculator files, but verification did not fully pass; see command output.")
+        return self._format_final_report(summary)
+
+    def _recover_quick_app_task(self, task, app):
+        """Write a known complete GUI demo, then compile and run its behavioral tests."""
+        folder = app
+        files = quick_app_files(app)
+        report = self.last_task_report
+        report.update({
+            "task": task, "changed_files": [], "commands": [], "static_checks": [],
+            "specification": None,
+            "architect": {"provider": "none", "model": "none", "status": "SKIPPED (deterministic quick app)"},
+            "coder": {"provider": "local recovery", "model": "Python standard library"},
+            "implementation_source": "deterministic local Tkinter quick-app template",
+        })
+        self.show_status("Creating the complete " + app.replace("_", " ") + " GUI and running checks")
+        for path, content in files.items():
+            written = self.execute_tool("write_file", {"path": path, "content": content})
+            if not isinstance(written, dict) or written.get("success") is not True:
+                report["initial_error"] = "Could not write " + path + ": " + str(
+                    written.get("error", "unknown file tool error") if isinstance(written, dict) else written
+                )
+                report["verification_status"] = "FAIL"
+                return self._format_final_report("Quick app recovery failed while writing source files.")
+            if path not in report["changed_files"]:
+                report["changed_files"].append(path)
+            report["static_checks"].append(verify_changed_file(self.workspace, path))
+
+        commands = [
+            f'"{sys.executable}" -m py_compile main.py "{folder}/main.py" "{folder}/app_logic.py" "{folder}/test_app_logic.py"',
+            f'"{sys.executable}" -m unittest discover -s "{folder}" -p "test_app_logic.py" -v',
+        ]
+        for command in commands:
+            outcome = self.execute_tool("run_command", {"command": command})
+            outcome = outcome if isinstance(outcome, dict) else {"success": False, "stderr": str(outcome)}
+            record = {
+                "command": command, "cwd": outcome.get("cwd", self.workspace),
+                "duration_seconds": outcome.get("duration_seconds"),
+                "timed_out": outcome.get("timed_out", False),
+                "return_code": outcome.get("return_code"),
+                "success": outcome.get("success") is True and outcome.get("return_code") == 0,
+                "stdout": outcome.get("stdout", ""), "stderr": outcome.get("stderr", ""),
+                "meaningful_check": True,
+            }
+            record["test_counts"] = _test_counts(command, record["stdout"], record["stderr"])
+            record["executed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            report["commands"].append(record)
+            self.emit_event("verification", message=f"{command} — {'PASS' if record['success'] else 'FAIL'}")
+
+        checks_pass = all(item.get("success") for item in report["static_checks"])
+        command_pass = bool(report["commands"]) and all(
+            item.get("success") and item.get("return_code") == 0 for item in report["commands"]
+        )
+        test_recorded = any(_test_run_executed(item) for item in report["commands"])
+        report["verification_status"] = "PASS" if checks_pass and command_pass and test_recorded else "FAIL"
+        report["behavioral_tests_pass"] = test_recorded
+        if not command_pass or not test_recorded:
+            report["initial_error"] = "App files were generated, but compile/test verification failed or discovered no tests."
+        summary = (
+            "Created the " + app.replace("_", " ") + " GUI in " + folder
+            + "/ with a root main.py launcher, local data persistence where applicable, and behavioral tests."
+            if report["verification_status"] == "PASS"
+            else "Created " + app.replace("_", " ") + " files, but verification did not fully pass; see command output."
+        )
         return self._format_final_report(summary)
 
     def _generate_missing_files_locally(self, client, task_context, expected_paths):
@@ -2173,11 +2237,13 @@ Workspace root is the current directory. Keep file operations inside it.
         else:
             model = self.config.get("models", {}).get("coder", "not configured")
         try:
-            # Common calculator requests are deterministic and need no LLM planning.
-            # This avoids repeated low-information tool calls from tiny local models.
-            if supports_calculator_project(task):
-                result = self._recover_calculator_gui_task(task)
-                return result
+            # The four exhibition demos use bounded, deterministic implementations so
+            # small local models do not have to invent core app behavior from scratch.
+            quick_app = detect_quick_app(task)
+            if quick_app == "calculator" or supports_calculator_project(task):
+                return self._recover_calculator_gui_task(task)
+            if quick_app in {"number_guessing_game", "todo_list_app", "expense_tracker"}:
+                return self._recover_quick_app_task(task, quick_app)
 
             self.show_status("Planning task and identifying deliverables")
             specification, architect = self._architect_task(task, previous_report=prior_report)
